@@ -27,10 +27,10 @@ async function handleTextMessage(ctx) {
     const result = await processMessage(text, user.id);
 
     if (!result.success) {
-      const aiUnavailable = !process.env.ANTHROPIC_API_KEY;
+      const aiUnavailable = !process.env.GEMINI_API_KEY;
       if (aiUnavailable) {
         await ctx.reply(
-          `⚙️ A IA está desabilitada no momento (ANTHROPIC_API_KEY não configurada).\n\n` +
+          `⚙️ A IA está desabilitada no momento (GEMINI_API_KEY não configurada).\n\n` +
           `Use os comandos disponíveis: /resumo, /saldo, /gastos, /metas ou /ajuda.`,
           { parse_mode: 'Markdown' }
         );

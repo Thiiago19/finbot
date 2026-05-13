@@ -9,7 +9,7 @@
     "dev": "node --watch src/index.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
+    "@google/generative-ai": "^0.24.1",
     "dotenv": "^16.4.0",
     "telegraf": "^4.16.3"
   },

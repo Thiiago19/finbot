@@ -1,4 +1,4 @@
-import { generateInsights } from '../ai/claude.js';
+import { generateInsights } from '../ai/gemini.js';
 import {
   getMonthlySummary,
   getPreviousMonthSummary,

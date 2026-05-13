@@ -1,4 +1,4 @@
-import { parseTransaction } from '../ai/claude.js';
+import { parseTransaction } from '../ai/gemini.js';
 import {
   insertTransaction,
   getCategoryMonthTotal,

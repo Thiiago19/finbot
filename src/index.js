@@ -8,8 +8,8 @@ function validateEnv() {
   if (!process.env.TELEGRAM_TOKEN) {
     throw new Error('Variável de ambiente ausente: TELEGRAM_TOKEN');
   }
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.log('[FinBot] ANTHROPIC_API_KEY não configurada — funcionalidades de IA desabilitadas.');
+  if (!process.env.GEMINI_API_KEY) {
+    console.log('[FinBot] GEMINI_API_KEY não configurada — funcionalidades de IA desabilitadas.');
   }
 }
 
