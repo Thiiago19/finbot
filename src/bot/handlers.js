@@ -1,5 +1,5 @@
 import { Markup } from 'telegraf';
-import { getOrCreateUser } from '../db/queries.js';
+import { getOrCreateUser, deleteAllTransactions } from '../db/queries.js';
 import { processMessage, saveTransaction } from '../services/transactions.js';
 import { runAlertsAfterExpense } from '../services/alerts.js';
 import { generateSarcasticResponse } from '../ai/gemini.js';
@@ -16,6 +16,8 @@ export function registerHandlers(bot) {
   bot.on('text', handleTextMessage);
   bot.action(/^confirm_(.+)$/, handleConfirmCallback);
   bot.action('cancel_transaction', handleCancelCallback);
+  bot.action('limpar_confirmar', handleLimparConfirmar);
+  bot.action('limpar_cancelar', handleLimparCancelar);
 }
 
 async function handleTextMessage(ctx) {
@@ -165,5 +167,31 @@ async function handleCancelCallback(ctx) {
     });
   } catch (error) {
     console.error('[FinBot ERROR] Erro ao cancelar transação:', error.message);
+  }
+}
+
+async function handleLimparConfirmar(ctx) {
+  try {
+    await ctx.answerCbQuery();
+    const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
+    const deleted = deleteAllTransactions(user.id);
+    await ctx.editMessageText(
+      `🗑️ *Feito. ${deleted} transação(ões) apagada(s).*\n\n_Conta zerada. Vida nova. Mesmos hábitos, provavelmente. 😏_`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro ao limpar transações:', error.message);
+    await ctx.reply('❌ Erro ao apagar as transações. Tente novamente.');
+  }
+}
+
+async function handleLimparCancelar(ctx) {
+  try {
+    await ctx.answerCbQuery('Cancelado.');
+    await ctx.editMessageText('👍 *Cancelado.* Suas transações estão salvas e seguras.\n\n_Por hoje você foi responsável. 😌_', {
+      parse_mode: 'Markdown',
+    });
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro ao cancelar /limpar:', error.message);
   }
 }

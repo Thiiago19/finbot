@@ -1,4 +1,5 @@
 import { getOrCreateUser, getMonthlySummary, getPreviousMonthSummary, getActiveGoals } from '../db/queries.js';
+import { Markup } from 'telegraf';
 import { getMonthlyInsights } from '../services/insights.js';
 import { getRecentTransactions } from '../services/transactions.js';
 import {
@@ -16,6 +17,7 @@ export function registerCommands(bot) {
   bot.command('gastos', handleGastos);
   bot.command('metas', handleMetas);
   bot.command('ajuda', handleAjuda);
+  bot.command('limpar', handleLimpar);
   bot.help(handleAjuda);
 }
 
@@ -181,5 +183,26 @@ async function handleAjuda(ctx) {
     );
   } catch (error) {
     console.error('[FinBot ERROR] Erro no /ajuda:', error.message);
+  }
+}
+
+async function handleLimpar(ctx) {
+  try {
+    await ctx.reply(
+      `🗑️ *Apagar todas as transações?*\n\n` +
+      `Isso vai deletar *todo o seu histórico financeiro* permanentemente.\n` +
+      `Não tem como desfazer. Sério. 🤡`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback('✅ Confirmar', 'limpar_confirmar'),
+            Markup.button.callback('❌ Cancelar', 'limpar_cancelar'),
+          ],
+        ]),
+      }
+    );
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro no /limpar:', error.message);
   }
 }

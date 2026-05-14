@@ -185,6 +185,12 @@ export function updateGoalProgress(goalId, amount) {
   }
 }
 
+export function deleteAllTransactions(userId) {
+  const db = getDatabase();
+  const result = db.prepare('DELETE FROM transactions WHERE user_id = ?').run(userId);
+  return result.changes;
+}
+
 export function getRecentTransactionsForInsights(userId, limit = 50) {
   const db = getDatabase();
   return db
