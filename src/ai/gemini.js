@@ -1,7 +1,8 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { PARSE_TRANSACTION_PROMPT, INSIGHTS_PROMPT } from './prompts.js';
 
-const MODEL = 'gemini-1.5-flash';
+const MODEL = 'gemini-2.5-flash-lite';
+const API_OPTIONS = { apiVersion: 'v1' };
 
 function getClient() {
   if (!process.env.GEMINI_API_KEY) return null;
@@ -21,7 +22,7 @@ export async function parseTransaction(message, userId) {
         temperature: 0.1,
         responseMimeType: 'application/json',
       },
-    });
+    }, API_OPTIONS);
 
     const result = await model.generateContent(message);
     const rawText = result.response.text().trim();
@@ -94,7 +95,7 @@ ${recentTransactions
         maxOutputTokens: 500,
         temperature: 0.7,
       },
-    });
+    }, API_OPTIONS);
 
     const result = await model.generateContent(
       `Gere insights financeiros baseados nesses dados reais:\n${dataContext}`
