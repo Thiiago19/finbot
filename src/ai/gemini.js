@@ -1,38 +1,35 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { PARSE_TRANSACTION_PROMPT, INSIGHTS_PROMPT } from './prompts.js';
 
-const MODEL = 'gemini-2.5-flash-lite';
-const API_OPTIONS = { apiVersion: 'v1' };
-
-function getClient() {
+function getModel() {
   if (!process.env.GEMINI_API_KEY) return null;
-  return new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+  return genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
+}
+
+function extractJSON(text) {
+  const block = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (block) return JSON.parse(block[1].trim());
+  const obj = text.match(/\{[\s\S]*\}/);
+  if (obj) return JSON.parse(obj[0]);
+  return JSON.parse(text.trim());
 }
 
 export async function parseTransaction(message, userId) {
-  const client = getClient();
-  if (!client) return null;
+  const model = getModel();
+  if (!model) return null;
+
+  const prompt = `${PARSE_TRANSACTION_PROMPT}
+
+Mensagem do usuário: "${message}"
+
+Retorne SOMENTE o JSON, sem texto adicional.`;
 
   try {
-    const model = client.getGenerativeModel({
-      model: MODEL,
-      systemInstruction: PARSE_TRANSACTION_PROMPT,
-      generationConfig: {
-        maxOutputTokens: 300,
-        temperature: 0.1,
-        responseMimeType: 'application/json',
-      },
-    }, API_OPTIONS);
+    const result = await model.generateContent(prompt);
+    const text = result.response.text();
 
-    const result = await model.generateContent(message);
-    const rawText = result.response.text().trim();
-
-    if (!rawText) {
-      console.log(`[FinBot] Gemini retornou resposta vazia para userId=${userId}`);
-      return null;
-    }
-
-    const parsed = JSON.parse(rawText);
+    const parsed = extractJSON(text);
 
     if (
       typeof parsed.type !== 'string' ||
@@ -60,48 +57,33 @@ export async function parseTransaction(message, userId) {
 }
 
 export async function generateInsights(userData) {
-  const client = getClient();
-  if (!client) return null;
+  const model = getModel();
+  if (!model) return null;
 
-  try {
-    const { summary, previousSummary, recentTransactions, firstName } = userData;
+  const { summary, previousSummary, recentTransactions, firstName } = userData;
 
-    const dataContext = `
-Usuário: ${firstName}
-Mês atual:
-- Receitas totais: R$ ${summary.total_income.toFixed(2)}
-- Gastos totais: R$ ${summary.total_expenses.toFixed(2)}
+  const prompt = `${INSIGHTS_PROMPT}
+
+Dados financeiros reais do usuário ${firstName}:
+- Receitas do mês: R$ ${summary.total_income.toFixed(2)}
+- Gastos do mês: R$ ${summary.total_expenses.toFixed(2)}
 - Saldo: R$ ${(summary.total_income - summary.total_expenses).toFixed(2)}
 - Gastos por categoria: ${JSON.stringify(summary.by_category)}
-
-Mês anterior:
-- Receitas: R$ ${previousSummary.total_income.toFixed(2)}
-- Gastos: R$ ${previousSummary.total_expenses.toFixed(2)}
-
-Últimas transações:
+- Receitas mês anterior: R$ ${previousSummary.total_income.toFixed(2)}
+- Gastos mês anterior: R$ ${previousSummary.total_expenses.toFixed(2)}
+- Últimas transações:
 ${recentTransactions
   .slice(0, 10)
   .map(
     (t) =>
-      `- ${t.type === 'expense' ? 'Gasto' : 'Receita'} de R$ ${t.amount.toFixed(2)} em ${t.category}: ${t.description || 'sem descrição'}`
+      `  - ${t.type === 'expense' ? 'Gasto' : 'Receita'} de R$ ${t.amount.toFixed(2)} em ${t.category}: ${t.description || 'sem descrição'}`
   )
-  .join('\n')}
-`;
+  .join('\n')}`;
 
-    const model = client.getGenerativeModel({
-      model: MODEL,
-      systemInstruction: INSIGHTS_PROMPT,
-      generationConfig: {
-        maxOutputTokens: 500,
-        temperature: 0.7,
-      },
-    }, API_OPTIONS);
-
-    const result = await model.generateContent(
-      `Gere insights financeiros baseados nesses dados reais:\n${dataContext}`
-    );
-
-    return result.response.text().trim() || null;
+  try {
+    const result = await model.generateContent(prompt);
+    const text = result.response.text();
+    return text.trim() || null;
   } catch (error) {
     console.error('[FinBot ERROR] Falha ao gerar insights com Gemini:', error.message);
     return null;
