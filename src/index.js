@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { createServer } from 'http';
 import { Telegraf } from 'telegraf';
 import { initDatabase, closeDatabase } from './db/database.js';
 import { registerCommands } from './bot/commands.js';
@@ -30,6 +31,11 @@ async function main() {
 
   process.once('SIGINT', () => shutdown(bot));
   process.once('SIGTERM', () => shutdown(bot));
+
+  const port = process.env.PORT || 3000;
+  createServer((_, res) => res.end('OK')).listen(port, () => {
+    console.log(`[FinBot] Servidor HTTP ouvindo na porta ${port}`);
+  });
 
   await bot.launch();
   console.log('[FinBot] Bot iniciado com sucesso! Aguardando mensagens...');
