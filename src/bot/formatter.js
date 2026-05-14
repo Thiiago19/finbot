@@ -114,6 +114,19 @@ export function formatInsight(text) {
   return `\n😏 *O FinBot tem algo a dizer:*\n_${text}_`;
 }
 
+export function formatSarcasticSave(sarcasticText, parsed, categoryTotal) {
+  const typeEmoji = parsed.type === 'expense' ? '💸' : '💰';
+  const emoji = CATEGORY_EMOJIS[parsed.category] || '📦';
+
+  let msg = `${typeEmoji} *Registrado!*\n\n`;
+  msg += `_${sarcasticText}_\n\n`;
+  msg += `${emoji} ${parsed.category} · ${formatCurrency(parsed.amount)}`;
+  if (parsed.type === 'expense' && categoryTotal > 0) {
+    msg += `\n📊 Total no mês em ${parsed.category}: ${formatCurrency(categoryTotal)}`;
+  }
+  return msg;
+}
+
 export function formatTransaction(transaction) {
   const emoji = CATEGORY_EMOJIS[transaction.category] || '📦';
   const typeEmoji = transaction.type === 'expense' ? '💸' : '💰';

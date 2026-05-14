@@ -2,9 +2,11 @@ import { Markup } from 'telegraf';
 import { getOrCreateUser } from '../db/queries.js';
 import { processMessage, saveTransaction } from '../services/transactions.js';
 import { runAlertsAfterExpense } from '../services/alerts.js';
+import { generateSarcasticResponse } from '../ai/gemini.js';
 import {
   formatCurrency,
   formatTransactionConfirm,
+  formatSarcasticSave,
 } from './formatter.js';
 
 // Armazenamento temporário de transações pendentes de confirmação (em memória)
@@ -79,18 +81,17 @@ async function handleTextMessage(ctx) {
       return;
     }
 
-    const typeEmoji = parsed.type === 'expense' ? '💸' : '💰';
-    const typeLabel = parsed.type === 'expense' ? 'Gasto' : 'Receita';
+    const sarcasticText = await generateSarcasticResponse({
+      type: parsed.type,
+      amount: parsed.amount,
+      category: parsed.category,
+      description: parsed.description,
+      categoryTotal: saveResult.categoryTotal,
+    });
 
-    let responseMsg =
-      `✅ *${typeLabel} registrado!*\n\n` +
-      `${typeEmoji} *${formatCurrency(parsed.amount)}*\n` +
-      `📂 ${parsed.category}\n` +
-      `📝 ${parsed.description || 'sem descrição'}\n`;
-
-    if (parsed.type === 'expense' && saveResult.categoryTotal > 0) {
-      responseMsg += `\n📊 Total em *${parsed.category}* este mês: ${formatCurrency(saveResult.categoryTotal)}`;
-    }
+    const responseMsg = sarcasticText
+      ? formatSarcasticSave(sarcasticText, parsed, saveResult.categoryTotal)
+      : `✅ *Registrado!*\n\n${formatCurrency(parsed.amount)} em ${parsed.category}`;
 
     await ctx.reply(responseMsg, { parse_mode: 'Markdown' });
 
@@ -126,18 +127,17 @@ async function handleConfirmCallback(ctx) {
       return;
     }
 
-    const typeEmoji = pending.parsed.type === 'expense' ? '💸' : '💰';
-    const typeLabel = pending.parsed.type === 'expense' ? 'Gasto' : 'Receita';
+    const sarcasticText = await generateSarcasticResponse({
+      type: pending.parsed.type,
+      amount: pending.parsed.amount,
+      category: pending.parsed.category,
+      description: pending.parsed.description,
+      categoryTotal: saveResult.categoryTotal,
+    });
 
-    let responseMsg =
-      `✅ *${typeLabel} confirmado e registrado!*\n\n` +
-      `${typeEmoji} *${formatCurrency(pending.parsed.amount)}*\n` +
-      `📂 ${pending.parsed.category}\n` +
-      `📝 ${pending.parsed.description || 'sem descrição'}\n`;
-
-    if (pending.parsed.type === 'expense' && saveResult.categoryTotal > 0) {
-      responseMsg += `\n📊 Total em *${pending.parsed.category}* este mês: ${formatCurrency(saveResult.categoryTotal)}`;
-    }
+    const responseMsg = sarcasticText
+      ? formatSarcasticSave(sarcasticText, pending.parsed, saveResult.categoryTotal)
+      : `✅ *Confirmado!*\n\n${formatCurrency(pending.parsed.amount)} em ${pending.parsed.category}`;
 
     await ctx.editMessageText(responseMsg, { parse_mode: 'Markdown' });
 

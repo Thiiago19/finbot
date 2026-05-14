@@ -1,5 +1,5 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { PARSE_TRANSACTION_PROMPT, INSIGHTS_PROMPT } from './prompts.js';
+import { PARSE_TRANSACTION_PROMPT, INSIGHTS_PROMPT, SARCASTIC_RESPONSE_PROMPT } from './prompts.js';
 
 function getModel() {
   if (!process.env.GEMINI_API_KEY) return null;
@@ -52,6 +52,32 @@ Retorne SOMENTE o JSON, sem texto adicional.`;
     } else {
       console.error('[FinBot ERROR] Falha ao chamar Gemini API:', error.message);
     }
+    return null;
+  }
+}
+
+export async function generateSarcasticResponse({ type, amount, category, description, categoryTotal }) {
+  const model = getModel();
+  if (!model) return null;
+
+  const { formatCurrency } = await import('../bot/formatter.js');
+
+  const prompt = `${SARCASTIC_RESPONSE_PROMPT}
+
+Dados da transação:
+- Tipo: ${type === 'expense' ? 'gasto' : 'receita'}
+- Valor: ${formatCurrency(amount)}
+- Categoria: ${category}
+- Descrição: ${description || category}
+- Total em ${category} este mês (incluindo este): ${formatCurrency(categoryTotal)}
+
+Gere a resposta sarcástica agora.`;
+
+  try {
+    const result = await model.generateContent(prompt);
+    return result.response.text().trim() || null;
+  } catch (error) {
+    console.error('[FinBot ERROR] Falha ao gerar resposta sarcástica:', error.message);
     return null;
   }
 }
