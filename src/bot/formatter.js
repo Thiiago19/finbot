@@ -5,11 +5,25 @@ const CATEGORY_EMOJIS = {
   Saúde: '💊',
   Lazer: '🎉',
   Assinaturas: '📺',
-  Educação: '📚',
   Compras: '🛍️',
   Investimentos: '📈',
   Receita: '💰',
+  Educação: '📚',
   Outros: '📦',
+};
+
+const SARCASTIC_COMMENTS = {
+  Alimentação: 'Barriga cheia, carteira vazia 🍔',
+  Transporte: 'Indo a algum lugar importante, espero 🚗',
+  Moradia: 'Ter onde morar é luxo, né 🏠',
+  Saúde: 'Investindo no básico — pelo menos isso 💊',
+  Lazer: 'Saúde mental tem preço, aparentemente 🎉',
+  Assinaturas: 'Mais uma assinatura que você vai esquecer que tem 📺',
+  Educação: 'Alguém aqui quer crescer na vida 📚',
+  Compras: 'Terapia de varejo, claro 🛍️',
+  Investimentos: 'Olha aí, adulto responsável aparecendo 📈',
+  Receita: 'Dinheiro entrando! Aproveita, é raro 💰',
+  Outros: 'Misterioso. Não vamos perguntar 📦',
 };
 
 export function formatCurrency(amount) {
@@ -31,15 +45,17 @@ export function formatProgressBar(current, total, size = 10) {
 export function formatTransactionConfirm(parsed) {
   const typeLabel = parsed.type === 'expense' ? '💸 Gasto' : '💰 Receita';
   const emoji = CATEGORY_EMOJIS[parsed.category] || '📦';
+  const comment = SARCASTIC_COMMENTS[parsed.category] || '';
   const confidenceBar = formatProgressBar(parsed.confidence, 1, 5);
 
   return (
-    `📋 *Confirmar transação?*\n\n` +
+    `🧾 *Deixa eu confirmar se você realmente quer fazer isso...*\n\n` +
     `${typeLabel}\n` +
     `💵 Valor: *${formatCurrency(parsed.amount)}*\n` +
     `${emoji} Categoria: *${parsed.category}*\n` +
     `📝 Descrição: ${parsed.description || 'sem descrição'}\n` +
-    `🎯 Confiança: ${confidenceBar}`
+    `🎯 Confiança: ${confidenceBar}\n` +
+    (comment ? `\n_${comment}_` : '')
   );
 }
 
@@ -51,7 +67,13 @@ export function formatMonthlySummary(data, previousData, insightText) {
   const now = new Date();
   const monthName = now.toLocaleString('pt-BR', { month: 'long', year: 'numeric' });
 
-  let msg = `📊 *Resumo de ${monthName}*\n\n`;
+  const balanceComment = balance < 0
+    ? `_Mês produtivo na arte de gastar mais do que ganha. Talento raro. 🤡_`
+    : total_expenses === 0
+      ? `_Ou você não registrou nada, ou fez um milagre. 🙄_`
+      : `_Sobrou um troco. Guarda antes de inventar algo pra comprar. 😏_`;
+
+  let msg = `📊 *Resumo de ${monthName}*\n${balanceComment}\n\n`;
   msg += `🟢 Receitas: *${formatCurrency(total_income)}*\n`;
   msg += `🔴 Gastos: *${formatCurrency(total_expenses)}*\n`;
   msg += `${balanceEmoji} Saldo: *${formatCurrency(balance)}*\n`;
@@ -60,14 +82,17 @@ export function formatMonthlySummary(data, previousData, insightText) {
     const prevExpenses = previousData.total_expenses;
     if (prevExpenses > 0) {
       const variation = ((total_expenses - prevExpenses) / prevExpenses) * 100;
-      const variationEmoji = variation > 0 ? '📈' : '📉';
       const sign = variation > 0 ? '+' : '';
-      msg += `${variationEmoji} vs. mês anterior: *${sign}${variation.toFixed(1)}%*\n`;
+      if (variation > 0) {
+        msg += `📈 vs. mês anterior: *${sign}${variation.toFixed(1)}%* — progresso impressionante no esvaziamento da carteira 🙄\n`;
+      } else {
+        msg += `📉 vs. mês anterior: *${sign}${variation.toFixed(1)}%* — olha aí, alguém aprendeu! 😮\n`;
+      }
     }
   }
 
   if (by_category && by_category.length > 0) {
-    msg += `\n📌 *Top categorias (gastos):*\n`;
+    msg += `\n📌 *Onde o dinheiro foi parar:*\n`;
     const top5 = by_category.slice(0, 5);
     const maxAmount = top5[0]?.total || 1;
 
@@ -86,7 +111,7 @@ export function formatMonthlySummary(data, previousData, insightText) {
 }
 
 export function formatInsight(text) {
-  return `\n💡 *Insight do FinBot:*\n_${text}_`;
+  return `\n😏 *O FinBot tem algo a dizer:*\n_${text}_`;
 }
 
 export function formatTransaction(transaction) {
@@ -97,15 +122,26 @@ export function formatTransaction(transaction) {
 }
 
 export function formatGoal(goal) {
-  const progress = goal.target_amount > 0
-    ? goal.current_amount / goal.target_amount
-    : 0;
+  const progress = goal.target_amount > 0 ? goal.current_amount / goal.target_amount : 0;
   const bar = formatProgressBar(goal.current_amount, goal.target_amount);
   const remaining = goal.target_amount - goal.current_amount;
+
+  let progressComment;
+  if (progress >= 1) {
+    progressComment = '🎊 _Missão cumprida. Pode comemorar... com moderação._';
+  } else if (progress >= 0.75) {
+    progressComment = '😏 _Quase lá. Tente não desistir bem no final._';
+  } else if (progress >= 0.25) {
+    progressComment = '😬 _No caminho certo. Devagar, mas vai._';
+  } else {
+    progressComment = '🫠 _Começou bem... ou nem isso._';
+  }
+
   let msg = `🎯 *${goal.name}*\n`;
   msg += `   ${bar}\n`;
   msg += `   ${formatCurrency(goal.current_amount)} de ${formatCurrency(goal.target_amount)}\n`;
   msg += `   Faltam: ${formatCurrency(Math.max(remaining, 0))}\n`;
+  msg += `   ${progressComment}\n`;
 
   if (goal.deadline) {
     const deadline = new Date(goal.deadline).toLocaleDateString('pt-BR');
