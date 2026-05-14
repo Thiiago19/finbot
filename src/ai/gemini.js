@@ -1,7 +1,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { PARSE_TRANSACTION_PROMPT, INSIGHTS_PROMPT } from './prompts.js';
 
-const MODEL = 'gemini-2.0-flash-lite';
+const MODEL = 'gemini-1.5-flash';
 
 function getClient() {
   if (!process.env.GEMINI_API_KEY) return null;
