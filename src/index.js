@@ -5,6 +5,12 @@ import { initDatabase, closeDatabase } from './db/database.js';
 import { registerCommands } from './bot/commands.js';
 import { registerHandlers } from './bot/handlers.js';
 
+// Servidor HTTP iniciado imediatamente — antes de qualquer outra coisa
+const port = process.env.PORT || 3000;
+createServer((_, res) => res.end('OK')).listen(port, () => {
+  console.log(`[FinBot] Servidor HTTP ouvindo na porta ${port}`);
+});
+
 function validateEnv() {
   if (!process.env.TELEGRAM_TOKEN) {
     throw new Error('Variável de ambiente ausente: TELEGRAM_TOKEN');
@@ -31,11 +37,6 @@ async function main() {
 
   process.once('SIGINT', () => shutdown(bot));
   process.once('SIGTERM', () => shutdown(bot));
-
-  const port = process.env.PORT || 3000;
-  createServer((_, res) => res.end('OK')).listen(port, () => {
-    console.log(`[FinBot] Servidor HTTP ouvindo na porta ${port}`);
-  });
 
   await bot.launch();
   console.log('[FinBot] Bot iniciado com sucesso! Aguardando mensagens...');
