@@ -59,7 +59,52 @@ export function formatTransactionConfirm(parsed) {
   );
 }
 
-export function formatMonthlySummary(data, previousData, insightText) {
+const PAYMENT_EMOJIS = { credito: '💳', debito: '🏦', pix: '⚡', dinheiro: '💵', outro: '📦' };
+const PAYMENT_LABELS = { credito: 'Crédito', debito: 'Débito', pix: 'Pix', dinheiro: 'Dinheiro', outro: 'Outro' };
+const MONTH_NAMES = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+
+export function formatFatura({ avista, parcelas, totalParcelas, total }) {
+  const now = new Date();
+  const monthName = now.toLocaleString('pt-BR', { month: 'long' });
+  const cap = monthName.charAt(0).toUpperCase() + monthName.slice(1);
+
+  let msg = `💳 *Fatura de ${cap}*\n`;
+  msg += `_Prepare o coração (e a conta). 😏_\n\n`;
+  msg += `À vista: *${formatCurrency(avista)}*\n`;
+  msg += `Parcelas: *${formatCurrency(totalParcelas)}*\n`;
+
+  if (parcelas.length > 0) {
+    msg += `━━━━━━━━━━━━━━\n`;
+    for (const t of parcelas) {
+      msg += `📌 ${t.description || t.category} · ${formatCurrency(t.amount)} _(${t.installment_number}/${t.installments})_\n`;
+    }
+    msg += `━━━━━━━━━━━━━━\n`;
+  }
+
+  msg += `Total: *${formatCurrency(total)}* 💸\n`;
+  if (total === 0) msg += `\n_Zerei a fatura? Ou não usou o crédito? Respeito. 👏_`;
+  return msg;
+}
+
+export function formatFutureInstallments(monthsData) {
+  if (monthsData.length === 0) {
+    return '😏 *Parcelas futuras*\n\nParabéns, nenhuma parcela no horizonte. Milagre ou pobreza — não sei dizer. 🙄';
+  }
+
+  let msg = `📅 *Parcelas dos próximos meses*\n`;
+  msg += `_Esse dinheiro já foi. Só falta sair da conta. 🤡_\n\n`;
+
+  for (const { year, month, transactions, total } of monthsData) {
+    msg += `*${MONTH_NAMES[month - 1]}/${year}* — ${formatCurrency(total)}\n`;
+    for (const t of transactions) {
+      msg += `  💳 ${t.description || t.category} · ${formatCurrency(t.amount)} _(${t.installment_number}/${t.installments})_\n`;
+    }
+    msg += '\n';
+  }
+  return msg.trim();
+}
+
+export function formatMonthlySummary(data, previousData, insightText, paymentBreakdown, creditInstallmentsTotal) {
   const { total_income, total_expenses, by_category } = data;
   const balance = total_income - total_expenses;
   const balanceEmoji = balance >= 0 ? '🟢' : '🔴';
@@ -100,6 +145,22 @@ export function formatMonthlySummary(data, previousData, insightText) {
       const emoji = CATEGORY_EMOJIS[cat.category] || '📦';
       const bar = formatProgressBar(cat.total, maxAmount, 8);
       msg += `${emoji} ${cat.category}\n   ${bar} ${formatCurrency(cat.total)}\n`;
+    }
+  }
+
+  if (paymentBreakdown && paymentBreakdown.length > 0) {
+    msg += `\n💳 *Por método de pagamento:*\n`;
+    for (const p of paymentBreakdown) {
+      const emoji = PAYMENT_EMOJIS[p.payment_method] || '📦';
+      const label = PAYMENT_LABELS[p.payment_method] || p.payment_method;
+      msg += `${emoji} ${label}: ${formatCurrency(p.total)} _(${p.count}x)_\n`;
+    }
+  }
+
+  if (creditInstallmentsTotal > 0 && data.total_income > 0) {
+    const pct = Math.round((creditInstallmentsTotal / data.total_income) * 100);
+    if (pct > 30) {
+      msg += `\n⚠️ _Suas parcelas de crédito comprometem ${pct}% da renda. Impressionante. 😬_\n`;
     }
   }
 

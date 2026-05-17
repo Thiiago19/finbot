@@ -1,5 +1,8 @@
 import { Markup } from 'telegraf';
-import { getOrCreateUser, deleteAllTransactions } from '../db/queries.js';
+import {
+  getOrCreateUser, deleteAllTransactions,
+  updateTransactionPayment, createInstallmentTransactions,
+} from '../db/queries.js';
 import { processMessage, saveTransaction } from '../services/transactions.js';
 import { runAlertsAfterExpense } from '../services/alerts.js';
 import { generateSarcasticResponse } from '../ai/gemini.js';
@@ -10,23 +13,31 @@ import {
   formatSarcasticSave,
 } from './formatter.js';
 
-const pendingTransactions = new Map();
-const pendingPdfImports = new Map();
+const pendingTransactions = new Map();   // key: string → confirmação de texto/voz
+const pendingPdfImports = new Map();     // key: string → importação de PDF
+const pendingPaymentUpdate = new Map();  // key: transactionId → dados para método de pagamento
+const pendingInstallmentCount = new Map(); // key: userId → aguardando texto com nº de parcelas
 
 export function registerHandlers(bot) {
   bot.on('text', handleTextMessage);
   bot.on('photo', handlePhoto);
   bot.on('voice', handleVoice);
   bot.on('document', handleDocument);
+
   bot.action(/^confirm_(.+)$/, handleConfirmCallback);
   bot.action('cancel_transaction', handleCancelCallback);
+
+  bot.action(/^pay_(cred|deb|pix|din)_(\d+)$/, handlePaymentMethod);
+  bot.action(/^inst_(av|pr)_(\d+)$/, handleInstallmentChoice);
+
   bot.action(/^pdf_imp_(.+)$/, handlePdfImport);
   bot.action(/^pdf_can_(.+)$/, handlePdfCancel);
+
   bot.action('limpar_confirmar', handleLimparConfirmar);
   bot.action('limpar_cancelar', handleLimparCancelar);
 }
 
-// ─── Helpers compartilhados ──────────────────────────────────────────────────
+// ─── Helper: salvar + responder sarcástico + pedir método ────────────────────
 
 async function saveAndReply(ctx, parsed, rawSource, userId) {
   const saveResult = await saveTransaction(userId, parsed, rawSource);
@@ -54,7 +65,27 @@ async function saveAndReply(ctx, parsed, rawSource, userId) {
     for (const alert of alerts) {
       await ctx.reply(`${alert.emoji} ${alert.message}`, { parse_mode: 'Markdown' });
     }
+    await askPaymentMethod(ctx, saveResult.transactionId, parsed.amount, parsed.category, parsed.description);
   }
+}
+
+async function askPaymentMethod(ctx, transactionId, amount, category, description) {
+  pendingPaymentUpdate.set(transactionId, { amount, category, description, userId: ctx.from.id });
+  setTimeout(() => pendingPaymentUpdate.delete(transactionId), 5 * 60 * 1000);
+
+  await ctx.reply(
+    '💳 Como foi o pagamento?',
+    Markup.inlineKeyboard([
+      [
+        Markup.button.callback('💳 Crédito', `pay_cred_${transactionId}`),
+        Markup.button.callback('🏦 Débito', `pay_deb_${transactionId}`),
+      ],
+      [
+        Markup.button.callback('⚡ Pix', `pay_pix_${transactionId}`),
+        Markup.button.callback('💵 Dinheiro', `pay_din_${transactionId}`),
+      ],
+    ])
+  );
 }
 
 // ─── Texto ───────────────────────────────────────────────────────────────────
@@ -62,6 +93,12 @@ async function saveAndReply(ctx, parsed, rawSource, userId) {
 async function handleTextMessage(ctx) {
   const text = ctx.message.text;
   if (text.startsWith('/')) return;
+
+  // Verificar se usuário está aguardando número de parcelas
+  if (pendingInstallmentCount.has(ctx.from.id)) {
+    await handleInstallmentCountInput(ctx, text);
+    return;
+  }
 
   try {
     const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
@@ -119,7 +156,7 @@ async function handleTextMessage(ctx) {
   }
 }
 
-// ─── Foto / Cupom ────────────────────────────────────────────────────────────
+// ─── Foto ────────────────────────────────────────────────────────────────────
 
 async function handlePhoto(ctx) {
   try {
@@ -127,20 +164,14 @@ async function handlePhoto(ctx) {
       await ctx.reply('⚙️ IA não configurada. Adicione a GEMINI_API_KEY para usar esta função.');
       return;
     }
-
     await ctx.reply('🔍 Analisando o cupom... aguenta um segundo 🙄');
-
     const photos = ctx.message.photo;
-    const fileId = photos[photos.length - 1].file_id;
-    const base64 = await downloadTelegramFile(fileId);
-
+    const base64 = await downloadTelegramFile(photos[photos.length - 1].file_id);
     const parsed = await analyzeImage(base64, 'image/jpeg');
-
     if (!parsed) {
       await ctx.reply('😬 Não consegui identificar uma transação nessa imagem.\nTente uma foto mais clara do cupom ou nota fiscal.');
       return;
     }
-
     const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
     await saveAndReply(ctx, parsed, '[foto]', user.id);
   } catch (error) {
@@ -149,7 +180,7 @@ async function handlePhoto(ctx) {
   }
 }
 
-// ─── Áudio / Voz ─────────────────────────────────────────────────────────────
+// ─── Áudio ───────────────────────────────────────────────────────────────────
 
 async function handleVoice(ctx) {
   try {
@@ -157,33 +188,23 @@ async function handleVoice(ctx) {
       await ctx.reply('⚙️ IA não configurada. Adicione a GEMINI_API_KEY para usar esta função.');
       return;
     }
-
     await ctx.reply('🎙️ Ouvindo seu áudio... esperamos que seja sobre dinheiro 😏');
-
-    const fileId = ctx.message.voice.file_id;
-    const mimeType = ctx.message.voice.mime_type || 'audio/ogg';
-    const base64 = await downloadTelegramFile(fileId);
-
-    const parsed = await analyzeAudio(base64, mimeType);
-
+    const { file_id, mime_type } = ctx.message.voice;
+    const base64 = await downloadTelegramFile(file_id);
+    const parsed = await analyzeAudio(base64, mime_type || 'audio/ogg');
     if (!parsed) {
-      await ctx.reply('😬 Não consegui extrair uma transação do áudio.\nTente falar algo como: _"gastei cinquenta reais no mercado"_', { parse_mode: 'Markdown' });
+      await ctx.reply('😬 Não consegui extrair uma transação do áudio.\nTente falar: _"gastei cinquenta reais no mercado"_', { parse_mode: 'Markdown' });
       return;
     }
-
     const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
-
     if (parsed.confidence >= 0.6) {
       await saveAndReply(ctx, parsed, '[áudio]', user.id);
     } else {
       const key = `${user.id}_${Date.now()}`;
       pendingTransactions.set(key, { parsed, rawMessage: '[áudio]', userId: user.id });
       setTimeout(() => pendingTransactions.delete(key), 5 * 60 * 1000);
-
       await ctx.reply(
-        `🎙️ *Ouvi isso no seu áudio:*\n\n` +
-        formatTransactionConfirm(parsed) +
-        `\n\n_Tá certo isso? 🤔_`,
+        `🎙️ *Ouvi isso no seu áudio:*\n\n` + formatTransactionConfirm(parsed) + `\n\n_Tá certo isso? 🤔_`,
         {
           parse_mode: 'Markdown',
           ...Markup.inlineKeyboard([
@@ -201,57 +222,42 @@ async function handleVoice(ctx) {
   }
 }
 
-// ─── PDF / Extrato ───────────────────────────────────────────────────────────
+// ─── PDF ─────────────────────────────────────────────────────────────────────
 
 async function handleDocument(ctx) {
   try {
     const doc = ctx.message.document;
-
     if (doc.mime_type !== 'application/pdf') {
       await ctx.reply('📎 Só consigo analisar arquivos PDF por enquanto.\nPara outros tipos, tente descrever a transação em texto.');
       return;
     }
-
     if (!process.env.GEMINI_API_KEY) {
       await ctx.reply('⚙️ IA não configurada. Adicione a GEMINI_API_KEY para usar esta função.');
       return;
     }
-
     await ctx.reply('📄 Analisando o PDF... isso pode demorar um pouco ☕');
-
     const base64 = await downloadTelegramFile(doc.file_id);
     const transactions = await analyzePDF(base64);
-
     if (!transactions || transactions.length === 0) {
       await ctx.reply('😬 Não encontrei transações financeiras nesse PDF.\nTente um extrato bancário ou fatura de cartão.');
       return;
     }
-
-    const totalExpenses = transactions
-      .filter((t) => t.type === 'expense')
-      .reduce((s, t) => s + t.amount, 0);
-    const totalIncome = transactions
-      .filter((t) => t.type === 'income')
-      .reduce((s, t) => s + t.amount, 0);
+    const totalExpenses = transactions.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+    const totalIncome = transactions.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0);
 
     let summary = `📄 *Encontrei ${transactions.length} transação(ões) no PDF:*\n\n`;
     for (const t of transactions.slice(0, 10)) {
-      const emoji = t.type === 'expense' ? '💸' : '💰';
-      summary += `${emoji} ${formatCurrency(t.amount)} — ${t.category} _(${t.description})_\n`;
+      summary += `${t.type === 'expense' ? '💸' : '💰'} ${formatCurrency(t.amount)} — ${t.category} _(${t.description})_\n`;
     }
-    if (transactions.length > 10) {
-      summary += `_...e mais ${transactions.length - 10} transação(ões)._\n`;
-    }
-    summary += `\n💸 Total gastos: *${formatCurrency(totalExpenses)}*\n`;
-    summary += `💰 Total receitas: *${formatCurrency(totalIncome)}*\n\n`;
+    if (transactions.length > 10) summary += `_...e mais ${transactions.length - 10} transação(ões)._\n`;
+    summary += `\n💸 Gastos: *${formatCurrency(totalExpenses)}*\n`;
+    summary += `💰 Receitas: *${formatCurrency(totalIncome)}*\n\n`;
     summary += `_Quer importar tudo? Sem volta, hein. 😏_`;
 
     const key = `${ctx.from.id}_${Date.now()}`;
     pendingPdfImports.set(key, {
-      transactions,
-      userId: ctx.from.id,
-      firstName: ctx.from.first_name,
-      username: ctx.from.username,
+      transactions, userId: ctx.from.id,
+      firstName: ctx.from.first_name, username: ctx.from.username,
     });
     setTimeout(() => pendingPdfImports.delete(key), 10 * 60 * 1000);
 
@@ -275,26 +281,17 @@ async function handlePdfImport(ctx) {
     await ctx.answerCbQuery();
     const key = ctx.match[1];
     const pending = pendingPdfImports.get(key);
-
-    if (!pending) {
-      await ctx.editMessageText('⏰ Essa importação expirou. Envie o PDF novamente.');
-      return;
-    }
-
+    if (!pending) { await ctx.editMessageText('⏰ Essa importação expirou. Envie o PDF novamente.'); return; }
     pendingPdfImports.delete(key);
     const user = getOrCreateUser(pending.userId, pending.firstName, pending.username);
-
-    let saved = 0;
-    let failed = 0;
+    let saved = 0, failed = 0;
     for (const parsed of pending.transactions) {
       const result = await saveTransaction(user.id, parsed, '[PDF]');
       result.success ? saved++ : failed++;
     }
-
     const msg = failed > 0
-      ? `✅ *Importação concluída!*\n\n${saved} transação(ões) salvas, ${failed} falhou(aram).\n_Vida que segue. 😏_`
-      : `✅ *${saved} transação(ões) importada(s) com sucesso!*\n\n_Seu histórico agradece. Seu saldo talvez não. 🤡_`;
-
+      ? `✅ *Importação concluída!*\n\n${saved} salvas, ${failed} falhou(aram).\n_Vida que segue. 😏_`
+      : `✅ *${saved} transação(ões) importada(s)!*\n\n_Seu histórico agradece. Seu saldo, talvez não. 🤡_`;
     await ctx.editMessageText(msg, { parse_mode: 'Markdown' });
   } catch (error) {
     console.error('[FinBot ERROR] Erro ao importar PDF:', error.message);
@@ -305,42 +302,29 @@ async function handlePdfImport(ctx) {
 async function handlePdfCancel(ctx) {
   try {
     await ctx.answerCbQuery('Cancelado.');
-    const key = ctx.match[1];
-    pendingPdfImports.delete(key);
-    await ctx.editMessageText('❌ *Importação cancelada.*\n\n_O PDF foi ignorado. Por hoje. 😌_', {
-      parse_mode: 'Markdown',
-    });
+    pendingPdfImports.delete(ctx.match[1]);
+    await ctx.editMessageText('❌ *Importação cancelada.*\n\n_O PDF foi ignorado. Por hoje. 😌_', { parse_mode: 'Markdown' });
   } catch (error) {
     console.error('[FinBot ERROR] Erro ao cancelar importação PDF:', error.message);
   }
 }
 
-// ─── Callbacks de texto (confirm / cancel) ────────────────────────────────────
+// ─── Confirmação de texto/voz ─────────────────────────────────────────────────
 
 async function handleConfirmCallback(ctx) {
   try {
     await ctx.answerCbQuery();
     const key = ctx.match[1];
     const pending = pendingTransactions.get(key);
-
-    if (!pending) {
-      await ctx.editMessageText('⏰ Essa confirmação expirou. Por favor, envie a mensagem novamente.');
-      return;
-    }
-
+    if (!pending) { await ctx.editMessageText('⏰ Essa confirmação expirou. Por favor, envie a mensagem novamente.'); return; }
     pendingTransactions.delete(key);
-    const saveResult = await saveTransaction(pending.userId, pending.parsed, pending.rawMessage);
 
-    if (!saveResult.success) {
-      await ctx.editMessageText('❌ Erro ao salvar a transação. Tente novamente.');
-      return;
-    }
+    const saveResult = await saveTransaction(pending.userId, pending.parsed, pending.rawMessage);
+    if (!saveResult.success) { await ctx.editMessageText('❌ Erro ao salvar a transação. Tente novamente.'); return; }
 
     const sarcasticText = await generateSarcasticResponse({
-      type: pending.parsed.type,
-      amount: pending.parsed.amount,
-      category: pending.parsed.category,
-      description: pending.parsed.description,
+      type: pending.parsed.type, amount: pending.parsed.amount,
+      category: pending.parsed.category, description: pending.parsed.description,
       categoryTotal: saveResult.categoryTotal,
     });
 
@@ -351,14 +335,9 @@ async function handleConfirmCallback(ctx) {
     await ctx.editMessageText(responseMsg, { parse_mode: 'Markdown' });
 
     if (pending.parsed.type === 'expense') {
-      const alerts = await runAlertsAfterExpense(
-        pending.userId,
-        pending.parsed.category,
-        saveResult.categoryTotal
-      );
-      for (const alert of alerts) {
-        await ctx.reply(`${alert.emoji} ${alert.message}`, { parse_mode: 'Markdown' });
-      }
+      const alerts = await runAlertsAfterExpense(pending.userId, pending.parsed.category, saveResult.categoryTotal);
+      for (const alert of alerts) await ctx.reply(`${alert.emoji} ${alert.message}`, { parse_mode: 'Markdown' });
+      await askPaymentMethod(ctx, saveResult.transactionId, pending.parsed.amount, pending.parsed.category, pending.parsed.description);
     }
   } catch (error) {
     console.error('[FinBot ERROR] Erro ao confirmar transação:', error.message);
@@ -369,15 +348,121 @@ async function handleConfirmCallback(ctx) {
 async function handleCancelCallback(ctx) {
   try {
     await ctx.answerCbQuery('Transação cancelada.');
-    await ctx.editMessageText('❌ *Transação cancelada.*\n\nSe quiser registrar, me envie a mensagem novamente.', {
-      parse_mode: 'Markdown',
-    });
+    await ctx.editMessageText('❌ *Transação cancelada.*\n\nSe quiser registrar, me envie a mensagem novamente.', { parse_mode: 'Markdown' });
   } catch (error) {
     console.error('[FinBot ERROR] Erro ao cancelar transação:', error.message);
   }
 }
 
-// ─── Callbacks /limpar ────────────────────────────────────────────────────────
+// ─── Método de pagamento ──────────────────────────────────────────────────────
+
+async function handlePaymentMethod(ctx) {
+  try {
+    await ctx.answerCbQuery();
+    const method = ctx.match[1];
+    const transactionId = Number(ctx.match[2]);
+    const pending = pendingPaymentUpdate.get(transactionId);
+
+    if (!pending) {
+      await ctx.editMessageText('⏰ Opção expirada. A transação foi salva como "outro".');
+      return;
+    }
+
+    if (method === 'cred') {
+      await ctx.editMessageText(
+        '💳 Crédito! Agora me conta: foi parcelado?',
+        Markup.inlineKeyboard([
+          [
+            Markup.button.callback('1️⃣ À vista', `inst_av_${transactionId}`),
+            Markup.button.callback('📅 Parcelado', `inst_pr_${transactionId}`),
+          ],
+        ])
+      );
+      return;
+    }
+
+    pendingPaymentUpdate.delete(transactionId);
+    const methodMap = { deb: 'debito', pix: 'pix', din: 'dinheiro' };
+    const paymentMethod = methodMap[method] || 'outro';
+    updateTransactionPayment(transactionId, paymentMethod, 1, 1, null, null);
+
+    const labels = { deb: '🏦 Débito anotado!', pix: '⚡ Pix anotado!', din: '💵 Dinheiro anotado!' };
+    await ctx.editMessageText(
+      `${labels[method] || '✅ Anotado!'}\n_Pelo menos não vai gerar fatura. 😌_`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro ao processar método de pagamento:', error.message);
+  }
+}
+
+async function handleInstallmentChoice(ctx) {
+  try {
+    await ctx.answerCbQuery();
+    const choice = ctx.match[1];
+    const transactionId = Number(ctx.match[2]);
+    const pending = pendingPaymentUpdate.get(transactionId);
+
+    if (!pending) {
+      await ctx.editMessageText('⏰ Opção expirada.');
+      return;
+    }
+
+    if (choice === 'av') {
+      pendingPaymentUpdate.delete(transactionId);
+      updateTransactionPayment(transactionId, 'credito', 1, 1, null, null);
+      await ctx.editMessageText(
+        `💳 À vista no crédito.\n_Pelo menos vai só no próximo mês. 😏_`,
+        { parse_mode: 'Markdown' }
+      );
+    } else {
+      // Parcelado: aguardar texto com número de parcelas
+      pendingInstallmentCount.set(pending.userId, { transactionId, ...pending });
+      setTimeout(() => {
+        if (pendingInstallmentCount.get(pending.userId)?.transactionId === transactionId) {
+          pendingInstallmentCount.delete(pending.userId);
+          pendingPaymentUpdate.delete(transactionId);
+          updateTransactionPayment(transactionId, 'credito', 1, 1, null, null);
+        }
+      }, 5 * 60 * 1000);
+
+      await ctx.editMessageText(
+        '📅 Em quantas vezes?\n_Digite só o número (ex: 12)_',
+        { parse_mode: 'Markdown' }
+      );
+    }
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro ao processar parcelamento:', error.message);
+  }
+}
+
+async function handleInstallmentCountInput(ctx, text) {
+  const userId = ctx.from.id;
+  const pending = pendingInstallmentCount.get(userId);
+  const n = parseInt(text.trim(), 10);
+
+  if (isNaN(n) || n < 2 || n > 120) {
+    await ctx.reply('😬 Digite um número entre 2 e 120. Tente de novo.');
+    return;
+  }
+
+  pendingInstallmentCount.delete(userId);
+  pendingPaymentUpdate.delete(pending.transactionId);
+
+  try {
+    const { installmentAmount } = createInstallmentTransactions(pending.transactionId, n, userId);
+    await ctx.reply(
+      `${n}x sem juros? _Mentira do universo._ 😏\n\n` +
+      `Anotei *${formatCurrency(installmentAmount)}/mês* pelos próximos *${n} meses*. 💳`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro ao criar parcelas:', error.message);
+    await ctx.reply('❌ Erro ao criar as parcelas. Tente novamente.');
+  }
+}
+
+// ─── /limpar ──────────────────────────────────────────────────────────────────
 
 async function handleLimparConfirmar(ctx) {
   try {
@@ -397,9 +482,7 @@ async function handleLimparConfirmar(ctx) {
 async function handleLimparCancelar(ctx) {
   try {
     await ctx.answerCbQuery('Cancelado.');
-    await ctx.editMessageText('👍 *Cancelado.* Suas transações estão salvas e seguras.\n\n_Por hoje você foi responsável. 😌_', {
-      parse_mode: 'Markdown',
-    });
+    await ctx.editMessageText('👍 *Cancelado.* Suas transações estão salvas e seguras.\n\n_Por hoje você foi responsável. 😌_', { parse_mode: 'Markdown' });
   } catch (error) {
     console.error('[FinBot ERROR] Erro ao cancelar /limpar:', error.message);
   }

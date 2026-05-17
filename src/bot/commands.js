@@ -1,4 +1,7 @@
-import { getOrCreateUser, getMonthlySummary, getPreviousMonthSummary, getActiveGoals } from '../db/queries.js';
+import {
+  getOrCreateUser, getMonthlySummary, getPreviousMonthSummary, getActiveGoals,
+  getCreditFatura, getFutureInstallments, getPaymentMethodBreakdown,
+} from '../db/queries.js';
 import { Markup } from 'telegraf';
 import { getMonthlyInsights } from '../services/insights.js';
 import { getRecentTransactions } from '../services/transactions.js';
@@ -7,6 +10,8 @@ import {
   formatMonthlySummary,
   formatTransaction,
   formatGoal,
+  formatFatura,
+  formatFutureInstallments,
 } from './formatter.js';
 
 export function registerCommands(bot) {
@@ -18,6 +23,8 @@ export function registerCommands(bot) {
   bot.command('metas', handleMetas);
   bot.command('ajuda', handleAjuda);
   bot.command('limpar', handleLimpar);
+  bot.command('fatura', handleFatura);
+  bot.command('parcelas', handleParcelas);
   bot.help(handleAjuda);
 }
 
@@ -63,14 +70,21 @@ async function handleResumo(ctx) {
   try {
     const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
     const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth() + 1;
 
-    const summary = getMonthlySummary(user.id, now.getFullYear(), now.getMonth() + 1);
+    const summary = getMonthlySummary(user.id, year, month);
     const previousSummary = getPreviousMonthSummary(user.id);
+    const paymentBreakdown = getPaymentMethodBreakdown(user.id, year, month);
+    const fatura = getCreditFatura(user.id, year, month);
 
     await ctx.reply('⏳ Gerando seu resumo com insights da IA...', { parse_mode: 'Markdown' });
 
     const insightText = await getMonthlyInsights(user);
-    const message = formatMonthlySummary(summary, previousSummary, insightText);
+    const message = formatMonthlySummary(
+      summary, previousSummary, insightText,
+      paymentBreakdown, fatura.totalParcelas
+    );
 
     await ctx.reply(message, { parse_mode: 'Markdown' });
   } catch (error) {
@@ -170,6 +184,8 @@ async function handleAjuda(ctx) {
       `• /mes — mesmo que /resumo\n` +
       `• /saldo — saldo rápido do mês\n` +
       `• /gastos — últimas 10 transações\n` +
+      `• /fatura — fatura do crédito do mês\n` +
+      `• /parcelas — parcelas dos próximos 6 meses\n` +
       `• /metas — metas financeiras ativas\n` +
       `• /ajuda — esta mensagem\n\n` +
       `━━━━━━━━━━━━━━━━━━━\n` +
@@ -183,6 +199,29 @@ async function handleAjuda(ctx) {
     );
   } catch (error) {
     console.error('[FinBot ERROR] Erro no /ajuda:', error.message);
+  }
+}
+
+async function handleFatura(ctx) {
+  try {
+    const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
+    const now = new Date();
+    const data = getCreditFatura(user.id, now.getFullYear(), now.getMonth() + 1);
+    await ctx.reply(formatFatura(data), { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro no /fatura:', error.message);
+    await ctx.reply('❌ Não consegui buscar a fatura agora. Tente novamente.');
+  }
+}
+
+async function handleParcelas(ctx) {
+  try {
+    const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
+    const data = getFutureInstallments(user.id, 6);
+    await ctx.reply(formatFutureInstallments(data), { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro no /parcelas:', error.message);
+    await ctx.reply('❌ Não consegui listar as parcelas agora. Tente novamente.');
   }
 }
 

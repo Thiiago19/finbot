@@ -191,6 +191,123 @@ export function deleteAllTransactions(userId) {
   return result.changes;
 }
 
+// ─── Método de pagamento e parcelas ─────────────────────────────────────────
+
+export function getTransactionById(transactionId) {
+  const db = getDatabase();
+  return db.prepare('SELECT * FROM transactions WHERE id = ?').get(transactionId);
+}
+
+export function updateTransactionPayment(transactionId, paymentMethod, installments, installmentNumber, installmentGroupId, totalAmount) {
+  const db = getDatabase();
+  db.prepare(
+    `UPDATE transactions
+     SET payment_method = ?, installments = ?, installment_number = ?,
+         installment_group_id = ?, total_amount = ?
+     WHERE id = ?`
+  ).run(paymentMethod, installments, installmentNumber, installmentGroupId, totalAmount, transactionId);
+}
+
+export function createInstallmentTransactions(transactionId, totalInstallments, userId) {
+  const db = getDatabase();
+  const original = db.prepare('SELECT * FROM transactions WHERE id = ?').get(transactionId);
+  if (!original) throw new Error('Transação não encontrada');
+
+  const totalAmount = original.amount;
+  const installmentAmount = Math.round((totalAmount / totalInstallments) * 100) / 100;
+  const groupId = `${userId}_${Date.now()}`;
+  const baseDate = new Date(original.created_at);
+
+  db.prepare(
+    `UPDATE transactions
+     SET amount = ?, installments = ?, installment_number = 1,
+         installment_group_id = ?, total_amount = ?, payment_method = 'credito'
+     WHERE id = ?`
+  ).run(installmentAmount, totalInstallments, groupId, totalAmount, transactionId);
+
+  for (let i = 2; i <= totalInstallments; i++) {
+    const d = new Date(baseDate.getFullYear(), baseDate.getMonth() + (i - 1), baseDate.getDate());
+    const dateStr = d.toISOString().replace('T', ' ').substring(0, 19);
+    db.prepare(
+      `INSERT INTO transactions
+         (user_id, type, amount, category, description, raw_message,
+          payment_method, installments, installment_number, installment_group_id, total_amount, created_at)
+       VALUES (?, ?, ?, ?, ?, '[parcelado]', 'credito', ?, ?, ?, ?, ?)`
+    ).run(
+      original.user_id, original.type, installmentAmount,
+      original.category, original.description,
+      totalInstallments, i, groupId, totalAmount, dateStr
+    );
+  }
+
+  return { installmentAmount, groupId };
+}
+
+export function getCreditFatura(userId, year, month) {
+  const db = getDatabase();
+  const y = String(year);
+  const m = String(month).padStart(2, '0');
+
+  const avista = db.prepare(
+    `SELECT COALESCE(SUM(amount), 0) as total FROM transactions
+     WHERE user_id = ? AND type = 'expense' AND payment_method = 'credito'
+       AND (installments IS NULL OR installments = 1)
+       AND strftime('%Y', created_at) = ? AND strftime('%m', created_at) = ?`
+  ).get(userId, y, m);
+
+  const parcelas = db.prepare(
+    `SELECT * FROM transactions
+     WHERE user_id = ? AND type = 'expense' AND payment_method = 'credito'
+       AND installments > 1
+       AND strftime('%Y', created_at) = ? AND strftime('%m', created_at) = ?
+     ORDER BY installment_group_id, installment_number`
+  ).all(userId, y, m);
+
+  const totalParcelas = parcelas.reduce((s, t) => s + t.amount, 0);
+  return { avista: avista.total, parcelas, totalParcelas, total: avista.total + totalParcelas };
+}
+
+export function getFutureInstallments(userId, months = 6) {
+  const db = getDatabase();
+  const now = new Date();
+  const result = [];
+
+  for (let i = 0; i < months; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    const y = String(d.getFullYear());
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const rows = db.prepare(
+      `SELECT * FROM transactions
+       WHERE user_id = ? AND type = 'expense' AND payment_method = 'credito'
+         AND installments > 1
+         AND strftime('%Y', created_at) = ? AND strftime('%m', created_at) = ?
+       ORDER BY installment_group_id, installment_number`
+    ).all(userId, y, m);
+
+    if (rows.length > 0) {
+      result.push({
+        year: d.getFullYear(),
+        month: d.getMonth() + 1,
+        transactions: rows,
+        total: rows.reduce((s, t) => s + t.amount, 0),
+      });
+    }
+  }
+  return result;
+}
+
+export function getPaymentMethodBreakdown(userId, year, month) {
+  const db = getDatabase();
+  return db.prepare(
+    `SELECT payment_method, SUM(amount) as total, COUNT(*) as count
+     FROM transactions
+     WHERE user_id = ? AND type = 'expense'
+       AND strftime('%Y', created_at) = ? AND strftime('%m', created_at) = ?
+     GROUP BY payment_method
+     ORDER BY total DESC`
+  ).all(userId, String(year), String(month).padStart(2, '0'));
+}
+
 export function getRecentTransactionsForInsights(userId, limit = 50) {
   const db = getDatabase();
   return db

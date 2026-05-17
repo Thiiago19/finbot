@@ -17,6 +17,11 @@ CREATE TABLE IF NOT EXISTS transactions (
   )),
   description TEXT,
   raw_message TEXT,
+  payment_method TEXT DEFAULT 'outro',
+  installments INTEGER DEFAULT 1,
+  installment_number INTEGER DEFAULT 1,
+  installment_group_id TEXT,
+  total_amount REAL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id)
 );
