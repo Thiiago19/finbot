@@ -300,6 +300,16 @@ async function handleCardSelection(ctx) {
     updateTransactionCard(transactionId, card.name);
     pending.cardName = card.name;
 
+    if (pending.category === 'Assinaturas') {
+      pendingPaymentUpdate.delete(transactionId);
+      updateTransactionPayment(transactionId, 'credito', 1, 1, null, null);
+      await ctx.editMessageText(
+        `💳 *${card.name}* — assinatura no crédito anotada. 📺`,
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+
     await ctx.editMessageText(
       `💳 *${card.name}* selecionado! Compra parcelada?`,
       {
@@ -364,6 +374,14 @@ async function handleCardDueDayInput(ctx, text) {
     `✅ Cartão *${pending.cardName}* cadastrado! Vencimento todo dia *${day}*. Vou te avisar antes 😉`,
     { parse_mode: 'Markdown' }
   );
+
+  const paymentPending = pendingPaymentUpdate.get(pending.transactionId);
+  if (paymentPending?.category === 'Assinaturas') {
+    pendingPaymentUpdate.delete(pending.transactionId);
+    updateTransactionPayment(pending.transactionId, 'credito', 1, 1, null, null);
+    await ctx.reply('📺 Assinatura no crédito — anotado!', { parse_mode: 'Markdown' });
+    return;
+  }
 
   await ctx.reply(
     `Compra parcelada?`,
