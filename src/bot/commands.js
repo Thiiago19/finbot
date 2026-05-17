@@ -15,6 +15,7 @@ import {
   formatFutureInstallments,
   formatSubscriptions,
   formatCards,
+  formatContas,
 } from './formatter.js';
 
 export function registerCommands(bot) {
@@ -30,6 +31,7 @@ export function registerCommands(bot) {
   bot.command('parcelas', handleParcelas);
   bot.command('assinaturas', handleAssinaturas);
   bot.command('cartoes', handleCartoes);
+  bot.command('contas', handleContas);
   bot.help(handleAjuda);
 }
 
@@ -223,7 +225,8 @@ async function handleFatura(ctx) {
 async function handleAssinaturas(ctx) {
   try {
     const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
-    const subs = getAllActiveSubscriptions(user.id);
+    const allSubs = getAllActiveSubscriptions(user.id);
+    const subs = allSubs.filter((s) => !s.is_variable); // só streamings/valor fixo
     const text = formatSubscriptions(subs);
 
     if (subs.length === 0) {
@@ -242,6 +245,19 @@ async function handleAssinaturas(ctx) {
   } catch (error) {
     console.error('[FinBot ERROR] Erro no /assinaturas:', error.message);
     await ctx.reply('❌ Não consegui listar as assinaturas agora. Tente novamente.');
+  }
+}
+
+async function handleContas(ctx) {
+  try {
+    const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
+    const allSubs = getAllActiveSubscriptions(user.id);
+    const fixedSubs = allSubs.filter((s) => !s.is_variable);
+    const variableSubs = allSubs.filter((s) => s.is_variable);
+    await ctx.reply(formatContas(fixedSubs, variableSubs), { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro no /contas:', error.message);
+    await ctx.reply('❌ Não consegui listar as contas agora. Tente novamente.');
   }
 }
 

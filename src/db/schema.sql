@@ -59,12 +59,26 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   split_with INTEGER DEFAULT 1,
   my_amount REAL NOT NULL,
   is_split INTEGER DEFAULT 0,
+  is_variable INTEGER DEFAULT 0,
+  default_category TEXT DEFAULT 'Assinaturas',
   billing_day INTEGER,
   last_billed_at DATE,
   is_active INTEGER DEFAULT 1,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id),
   UNIQUE(user_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS pending_bills (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  subscription_id INTEGER NOT NULL,
+  category TEXT DEFAULT 'Moradia',
+  reminder_sent_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  due_date DATE NOT NULL,
+  resolved_at DATETIME,
+  FOREIGN KEY (user_id) REFERENCES users(id),
+  FOREIGN KEY (subscription_id) REFERENCES subscriptions(id)
 );
 
 CREATE TABLE IF NOT EXISTS cards (

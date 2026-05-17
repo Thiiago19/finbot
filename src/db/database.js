@@ -49,9 +49,22 @@ function runMigrations(db) {
     `ALTER TABLE transactions ADD COLUMN installment_group_id TEXT`,
     `ALTER TABLE transactions ADD COLUMN total_amount REAL`,
     `ALTER TABLE transactions ADD COLUMN card_name TEXT`,
+    `ALTER TABLE subscriptions ADD COLUMN is_variable INTEGER DEFAULT 0`,
+    `ALTER TABLE subscriptions ADD COLUMN default_category TEXT DEFAULT 'Assinaturas'`,
     `ALTER TABLE subscriptions ADD COLUMN billing_day INTEGER`,
     `ALTER TABLE subscriptions ADD COLUMN last_billed_at DATE`,
     `ALTER TABLE subscriptions ADD COLUMN is_active INTEGER DEFAULT 1`,
+    `CREATE TABLE IF NOT EXISTS pending_bills (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      subscription_id INTEGER NOT NULL,
+      category TEXT DEFAULT 'Moradia',
+      reminder_sent_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      due_date DATE NOT NULL,
+      resolved_at DATETIME,
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (subscription_id) REFERENCES subscriptions(id)
+    )`,
     `CREATE TABLE IF NOT EXISTS subscriptions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,

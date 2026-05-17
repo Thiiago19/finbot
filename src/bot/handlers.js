@@ -4,19 +4,22 @@ import {
   updateTransactionPayment, createInstallmentTransactions, updateTransactionAmount,
   getSubscription, saveSubscription,
   updateSubscriptionBillingDay, deactivateSubscription, getSubscriptionById,
+  updateSubscriptionAmount, insertSubscriptionTransaction,
+  insertPendingBill, getUnresolvedPendingBill, resolvePendingBill,
   getAllCards, saveCard, updateTransactionCard,
 } from '../db/queries.js';
 import { processMessage, saveTransaction } from '../services/transactions.js';
 import { runAlertsAfterExpense } from '../services/alerts.js';
 import { generateSarcasticResponse } from '../ai/gemini.js';
 import { downloadTelegramFile, analyzeImage, analyzeAudio, analyzePDF } from '../ai/media.js';
+import { pendingBillAmount } from '../state.js';
 import {
   formatCurrency,
   formatTransactionConfirm,
   formatSarcasticSave,
 } from './formatter.js';
 
-// ─── Detecção de serviços de streaming ───────────────────────────────────────
+// ─── Serviços de streaming (valor fixo) ──────────────────────────────────────
 
 const STREAMING_SERVICES = [
   ['spotify', 'Spotify'], ['netflix', 'Netflix'], ['disney', 'Disney+'],
@@ -36,17 +39,78 @@ function detectServiceName(description) {
   return { key: word.toLowerCase(), display: word };
 }
 
+// ─── Contas variáveis (internet, energia, água, etc.) ────────────────────────
+
+const VARIABLE_SERVICES = [
+  ['claro net', 'Internet (Claro)'], ['vivo fibra', 'Internet (Vivo)'],
+  ['tim live', 'Internet (TIM)'], ['oi fibra', 'Internet (Oi)'],
+  ['internet', 'Internet'], ['banda larga', 'Internet'], ['fibra', 'Internet'],
+  ['cpfl', 'Energia (CPFL)'], ['enel', 'Energia (Enel)'],
+  ['cemig', 'Energia (Cemig)'], ['copel', 'Energia (Copel)'],
+  ['energia elétrica', 'Energia Elétrica'], ['energia', 'Energia Elétrica'],
+  ['sabesp', 'Água (Sabesp)'], ['embasa', 'Água (Embasa)'],
+  ['saneamento', 'Água/Saneamento'],
+  ['comgás', 'Gás (Comgás)'], ['gás encanado', 'Gás'],
+  ['aluguel', 'Aluguel'], ['condomínio', 'Condomínio'],
+  ['plano de saúde', 'Plano de Saúde'], ['convênio médico', 'Plano de Saúde'],
+  ['unimed', 'Unimed'], ['amil', 'Amil'],
+  ['sulamerica', 'SulAmérica'], ['bradesco saúde', 'Bradesco Saúde'],
+  ['smartfit', 'SmartFit'], ['bodytech', 'Bodytech'], ['academia', 'Academia'],
+  ['seguro', 'Seguro'],
+  ['plano celular', 'Plano Celular'], ['conta do celular', 'Plano Celular'],
+];
+
+function detectVariableService(description) {
+  if (!description) return null;
+  const lower = description.toLowerCase();
+  for (const [key, display] of VARIABLE_SERVICES) {
+    if (lower.includes(key)) return display;
+  }
+  return null;
+}
+
+// ─── Sarcasmo para resposta de conta variável ─────────────────────────────────
+
+const BILL_SARCASMS = [
+  [['internet', 'fibra', 'banda larga', 'claro net', 'vivo fibra', 'tim live', 'oi fibra'], 'pela internet que cai toda hora'],
+  [['energia', 'cpfl', 'enel', 'cemig', 'copel', 'luz'], 'pela luz que você esquece acesa em todo canto'],
+  [['água', 'saneamento', 'sabesp', 'embasa'], 'pela água — esperamos que esteja economizando'],
+  [['gás', 'comgás'], 'pelo gás — pelo menos aquece no inverno'],
+  [['aluguel'], 'pelo aluguel — a certeza mensal que não falha'],
+  [['condomínio'], 'pelo condomínio e suas taxas que ninguém entende'],
+  [['plano de saúde', 'unimed', 'amil', 'sulamerica', 'bradesco'], 'pelo plano que cobre o que você nunca precisa'],
+  [['academia', 'smartfit', 'bodytech'], 'pela academia que você vai uma vez por mês, se tanto'],
+  [['seguro'], 'pelo seguro que você torce pra nunca precisar'],
+  [['celular', 'plano celular'], 'pelo celular que você não desgruda nem dormindo'],
+];
+
+function getBillSarcasm(name) {
+  const lower = name.toLowerCase();
+  for (const [keys, comment] of BILL_SARCASMS) {
+    if (keys.some((k) => lower.includes(k))) return comment;
+  }
+  return 'mais uma conta devidamente paga';
+}
+
+function parseMonetaryAmount(text) {
+  const cleaned = text.trim().replace(',', '.').replace(/[^\d.]/g, '');
+  const n = parseFloat(cleaned);
+  return !isNaN(n) && n > 0 && n < 1_000_000 ? n : null;
+}
+
 // ─── State maps ───────────────────────────────────────────────────────────────
 
-const pendingTransactions  = new Map(); // confirmação texto/voz
-const pendingPdfImports    = new Map(); // importação PDF
-const pendingPaymentUpdate = new Map(); // transactionId → dados método pagamento
-const pendingInstallCount  = new Map(); // userId → aguarda nº parcelas (texto)
-const pendingSubSplit      = new Map(); // transactionId → aguarda solo/dividido
-const pendingSubCount        = new Map(); // userId → aguarda nº pessoas (texto)
-const pendingSubBillingDay   = new Map(); // userId → aguarda dia de cobrança (texto)
-const pendingCardNameInput   = new Map(); // userId → aguarda nome do cartão (texto)
-const pendingCardDueDayInput = new Map(); // userId → aguarda dia vencimento (texto)
+const pendingTransactions      = new Map();
+const pendingPdfImports        = new Map();
+const pendingPaymentUpdate     = new Map();
+const pendingInstallCount      = new Map();
+const pendingSubSplit          = new Map();
+const pendingSubCount          = new Map();
+const pendingSubBillingDay     = new Map();
+const pendingVariableBillSetup = new Map(); // transactionId → dados
+const pendingVariableBillDay   = new Map(); // userId → dados
+const pendingCardNameInput     = new Map();
+const pendingCardDueDayInput   = new Map();
 
 export function registerHandlers(bot) {
   bot.on('text', handleTextMessage);
@@ -64,6 +128,9 @@ export function registerHandlers(bot) {
   bot.action(/^sub_cncl_(\d+)$/, handleSubCancel);
   bot.action(/^sub_cncl_yes_(\d+)$/, handleSubCancelConfirm);
   bot.action(/^sub_cncl_no_(\d+)$/, handleSubCancelKeep);
+
+  bot.action(/^varbill_(yes|no)_(\d+)$/, handleVariableBillChoice);
+
   bot.action(/^card_sel_(\d+)_(\d+)$/, handleCardSelection);
   bot.action(/^card_new_(\d+)$/, handleNewCard);
 
@@ -74,7 +141,7 @@ export function registerHandlers(bot) {
   bot.action('limpar_cancelar', handleLimparCancelar);
 }
 
-// ─── Helper central: salvar → sarcasmo → alertas → assinatura/pagamento ─────
+// ─── Helper central ───────────────────────────────────────────────────────────
 
 async function saveAndReply(ctx, parsed, rawSource, userId) {
   const saveResult = await saveTransaction(userId, parsed, rawSource);
@@ -101,8 +168,16 @@ async function saveAndReply(ctx, parsed, rawSource, userId) {
       await ctx.reply(`${alert.emoji} ${alert.message}`, { parse_mode: 'Markdown' });
     }
 
+    // Verificar streaming/assinatura fixa
     if (parsed.category === 'Assinaturas') {
       const skipPayment = await handleSubscriptionCheck(ctx, parsed, saveResult.transactionId, userId);
+      if (skipPayment) return;
+    }
+
+    // Verificar conta variável
+    const variableService = detectVariableService(parsed.description);
+    if (variableService) {
+      const skipPayment = await handleVariableBillCheck(ctx, parsed, saveResult.transactionId, userId, variableService);
       if (skipPayment) return;
     }
 
@@ -110,7 +185,7 @@ async function saveAndReply(ctx, parsed, rawSource, userId) {
   }
 }
 
-// ─── Assinatura: verificar se já existe ou perguntar sobre divisão ────────────
+// ─── Assinaturas fixas ────────────────────────────────────────────────────────
 
 async function handleSubscriptionCheck(ctx, parsed, transactionId, userId) {
   const { key, display } = detectServiceName(parsed.description);
@@ -118,27 +193,23 @@ async function handleSubscriptionCheck(ctx, parsed, transactionId, userId) {
 
   if (sub) {
     if (!sub.billing_day) {
-      // Assinatura sem dia de cobrança cadastrado — perguntar agora
       pendingSubBillingDay.set(ctx.from.id, {
-        subId: sub.id, transactionId, displayName: sub.name,
-        myAmount: sub.my_amount, isSplit: false, // isSplit irrelevante (não ajusta amount)
+        subId: sub.id, transactionId, displayName: sub.name, myAmount: sub.my_amount, isSplit: false,
       });
       await ctx.reply(
         `Ah, o *${sub.name}* de novo 😏\nMas ainda não sei quando é cobrado. Qual o dia do mês?`,
         { parse_mode: 'Markdown' }
       );
-      return true; // fluxo de billing_day vai pedir método de pagamento depois
+      return true;
     }
     await ctx.reply(
       `Ah, o *${sub.name}* de novo. ${formatCurrency(sub.my_amount)}/mês debitado da sua consciência 😏`,
       { parse_mode: 'Markdown' }
     );
-    return false; // continua para perguntar método de pagamento
+    return false;
   }
 
-  pendingSubSplit.set(transactionId, {
-    key, display, totalAmount: parsed.amount, telegramUserId: ctx.from.id,
-  });
+  pendingSubSplit.set(transactionId, { key, display, totalAmount: parsed.amount, telegramUserId: ctx.from.id });
   setTimeout(() => {
     const p = pendingSubSplit.get(transactionId);
     if (p) {
@@ -160,7 +231,7 @@ async function handleSubscriptionCheck(ctx, parsed, transactionId, userId) {
       ]),
     }
   );
-  return true; // fluxo de assinatura vai perguntar método de pagamento depois
+  return true;
 }
 
 async function handleSubscriptionSplit(ctx) {
@@ -179,6 +250,7 @@ async function handleSubscriptionSplit(ctx) {
         transactionId, displayName: pending.display,
         totalAmount: pending.totalAmount, splitWith: 1,
         myAmount: pending.totalAmount, isSplit: false, dbUserId: user.id,
+        isVariable: false, defaultCategory: 'Assinaturas',
       });
       await ctx.editMessageText(
         `👤 Só você! Qual dia do mês o *${pending.display}* é cobrado? _(ex: 15)_`,
@@ -186,10 +258,7 @@ async function handleSubscriptionSplit(ctx) {
       );
     } else {
       pendingSubCount.set(ctx.from.id, { transactionId, ...pending, dbUserId: user.id });
-      await ctx.editMessageText(
-        '👥 Com quantas pessoas no total? _(incluindo você, ex: 3)_',
-        { parse_mode: 'Markdown' }
-      );
+      await ctx.editMessageText('👥 Com quantas pessoas no total? _(incluindo você, ex: 3)_', { parse_mode: 'Markdown' });
     }
   } catch (error) {
     console.error('[FinBot ERROR] Erro no fluxo de assinatura:', error.message);
@@ -216,12 +285,163 @@ async function handleSubscriptionCountInput(ctx, text) {
     transactionId: pending.transactionId, displayName: pending.display,
     totalAmount: pending.totalAmount, splitWith: n,
     myAmount, isSplit: true, dbUserId: pending.dbUserId,
+    isVariable: false, defaultCategory: 'Assinaturas',
   });
 
   await ctx.reply(
     `👥 Dividido por ${n}! E qual dia do mês o *${pending.display}* é cobrado? _(ex: 15)_`,
     { parse_mode: 'Markdown' }
   );
+}
+
+// ─── Contas variáveis (internet, luz, água, etc.) ─────────────────────────────
+
+async function handleVariableBillCheck(ctx, parsed, transactionId, userId, serviceName) {
+  const sub = getSubscription(userId, serviceName);
+
+  if (sub && sub.is_variable) {
+    // Conta variável já cadastrada — atualizar last amount e seguir
+    updateSubscriptionAmount(sub.id, parsed.amount);
+    return false; // perguntar método de pagamento normalmente
+  }
+
+  if (sub && !sub.is_variable) {
+    // Existe como fixa (não deveria acontecer, mas tratar)
+    return false;
+  }
+
+  // Primeira vez — perguntar se é mensal
+  pendingVariableBillSetup.set(transactionId, {
+    serviceName, category: parsed.category, telegramUserId: ctx.from.id, totalAmount: parsed.amount,
+  });
+  setTimeout(() => pendingVariableBillSetup.delete(transactionId), 5 * 60 * 1000);
+
+  await ctx.reply(
+    `🔌 *${serviceName}* — essa conta vem todo mês?`,
+    {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([
+        [
+          Markup.button.callback('📅 Sim, é mensal', `varbill_yes_${transactionId}`),
+          Markup.button.callback('1️⃣ Foi só essa vez', `varbill_no_${transactionId}`),
+        ],
+      ]),
+    }
+  );
+  return true; // fluxo de conta variável cuida do método de pagamento
+}
+
+async function handleVariableBillChoice(ctx) {
+  try {
+    await ctx.answerCbQuery();
+    const choice = ctx.match[1];
+    const transactionId = Number(ctx.match[2]);
+    const pending = pendingVariableBillSetup.get(transactionId);
+    if (!pending) { await ctx.editMessageText('⏰ Opção expirada.'); return; }
+
+    if (choice === 'no') {
+      pendingVariableBillSetup.delete(transactionId);
+      await ctx.editMessageText('👍 Entendido, registrado como gasto avulso!', { parse_mode: 'Markdown' });
+      await askPaymentMethod(ctx, transactionId, pending.totalAmount, pending.category, pending.serviceName);
+      return;
+    }
+
+    // Sim, é mensal — pedir dia de vencimento
+    const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
+    pendingVariableBillSetup.delete(transactionId);
+    pendingVariableBillDay.set(ctx.from.id, {
+      transactionId, serviceName: pending.serviceName,
+      category: pending.category, totalAmount: pending.totalAmount,
+      dbUserId: user.id,
+    });
+
+    await ctx.editMessageText(
+      `📅 Qual o dia que o *${pending.serviceName}* costuma vencer? _(ex: 10)_`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro no fluxo de conta variável:', error.message);
+  }
+}
+
+async function handleVariableBillDayInput(ctx, text) {
+  const userId = ctx.from.id;
+  const pending = pendingVariableBillDay.get(userId);
+  const day = parseInt(text.trim(), 10);
+
+  if (isNaN(day) || day < 1 || day > 31) {
+    await ctx.reply('😬 Dia inválido. Digite um número entre 1 e 31.');
+    return;
+  }
+
+  pendingVariableBillDay.delete(userId);
+
+  saveSubscription(
+    pending.dbUserId, pending.serviceName,
+    pending.totalAmount, 1, pending.totalAmount, false,
+    day, true, pending.category
+  );
+
+  await ctx.reply(
+    `Anotado! Todo dia *${day}* vou te lembrar da conta de *${pending.serviceName}*.\nPorque você definitivamente ia esquecer 😏`,
+    { parse_mode: 'Markdown' }
+  );
+
+  await askPaymentMethod(ctx, pending.transactionId, pending.totalAmount, pending.category, pending.serviceName);
+}
+
+// ─── Resposta de valor para lembrete de conta variável ───────────────────────
+
+async function handlePendingBillAmount(ctx, text, billInfo) {
+  const amount = parseMonetaryAmount(text);
+  if (!amount) {
+    await ctx.reply('Isso não parece um valor... tenta de novo? 🤨');
+    return;
+  }
+
+  const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
+  insertSubscriptionTransaction(user.id, billInfo.subName, amount, billInfo.category);
+  updateSubscriptionAmount(billInfo.subId, amount);
+  resolvePendingBill(billInfo.pendingBillId);
+  pendingBillAmount.delete(ctx.from.id);
+
+  const sarcasm = getBillSarcasm(billInfo.subName);
+  await ctx.reply(
+    `${formatCurrency(amount)} ${sarcasm}.\nAnotado! 😒`,
+    { parse_mode: 'Markdown' }
+  );
+}
+
+// ─── Dia de cobrança (streaming fixo) ────────────────────────────────────────
+
+async function handleSubBillingDayInput(ctx, text) {
+  const userId = ctx.from.id;
+  const pending = pendingSubBillingDay.get(userId);
+  const day = parseInt(text.trim(), 10);
+
+  if (isNaN(day) || day < 1 || day > 31) {
+    await ctx.reply('😬 Dia inválido. Digite um número entre 1 e 31.');
+    return;
+  }
+
+  pendingSubBillingDay.delete(userId);
+
+  if (pending.subId) {
+    updateSubscriptionBillingDay(pending.subId, day);
+  } else {
+    saveSubscription(
+      pending.dbUserId, pending.displayName,
+      pending.totalAmount, pending.splitWith, pending.myAmount, pending.isSplit,
+      day, pending.isVariable || false, pending.defaultCategory || 'Assinaturas'
+    );
+  }
+
+  await ctx.reply(
+    `📅 Perfeito! Todo dia *${day}* vou registrar o *${pending.displayName}* automaticamente.\nComo se você fosse cancelar algum dia 😏`,
+    { parse_mode: 'Markdown' }
+  );
+
+  await askPaymentMethod(ctx, pending.transactionId, pending.myAmount, 'Assinaturas', pending.displayName);
 }
 
 // ─── Método de pagamento ──────────────────────────────────────────────────────
@@ -262,7 +482,6 @@ async function handlePaymentMethod(ctx) {
       return;
     }
 
-    // Crédito: verificar cartões cadastrados
     const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
     const cards = getAllCards(user.id);
 
@@ -272,9 +491,7 @@ async function handlePaymentMethod(ctx) {
       return;
     }
 
-    const cardButtons = cards.map((c) => [
-      Markup.button.callback(`💳 ${c.name}`, `card_sel_${c.id}_${transactionId}`),
-    ]);
+    const cardButtons = cards.map((c) => [Markup.button.callback(`💳 ${c.name}`, `card_sel_${c.id}_${transactionId}`)]);
     cardButtons.push([Markup.button.callback('➕ Novo cartão', `card_new_${transactionId}`)]);
     await ctx.editMessageText('💳 Qual cartão foi usado?', Markup.inlineKeyboard(cardButtons));
   } catch (error) {
@@ -282,7 +499,7 @@ async function handlePaymentMethod(ctx) {
   }
 }
 
-// ─── Seleção / cadastro de cartão ────────────────────────────────────────────
+// ─── Cartão ───────────────────────────────────────────────────────────────────
 
 async function handleCardSelection(ctx) {
   try {
@@ -303,10 +520,7 @@ async function handleCardSelection(ctx) {
     if (pending.category === 'Assinaturas') {
       pendingPaymentUpdate.delete(transactionId);
       updateTransactionPayment(transactionId, 'credito', 1, 1, null, null);
-      await ctx.editMessageText(
-        `💳 *${card.name}* — assinatura no crédito anotada. 📺`,
-        { parse_mode: 'Markdown' }
-      );
+      await ctx.editMessageText(`💳 *${card.name}* — assinatura no crédito anotada. 📺`, { parse_mode: 'Markdown' });
       return;
     }
 
@@ -344,13 +558,12 @@ async function handleCardNameInput(ctx, text) {
   const name = text.trim();
 
   if (!name || name.length < 2 || name.length > 30) {
-    await ctx.reply('😬 Nome inválido. Digite um nome entre 2 e 30 caracteres (ex: Nubank).');
+    await ctx.reply('😬 Nome inválido. Digite entre 2 e 30 caracteres (ex: Nubank).');
     return;
   }
 
   pendingCardNameInput.delete(userId);
   pendingCardDueDayInput.set(userId, { transactionId: pending.transactionId, cardName: name });
-
   await ctx.reply(`💳 *${name}* — qual o dia do vencimento? _(1 a 31)_`, { parse_mode: 'Markdown' });
 }
 
@@ -394,7 +607,7 @@ async function handleCardDueDayInput(ctx, text) {
   );
 }
 
-// ─── À vista / Parcelado ─────────────────────────────────────────────────────
+// ─── À vista / Parcelado ──────────────────────────────────────────────────────
 
 async function handleInstallmentChoice(ctx) {
   try {
@@ -450,7 +663,7 @@ async function handleInstallmentCountInput(ctx, text) {
   }
 }
 
-// ─── Handler de texto: verifica todos os estados pendentes ───────────────────
+// ─── Handler de texto ─────────────────────────────────────────────────────────
 
 async function handleTextMessage(ctx) {
   const text = ctx.message.text;
@@ -458,11 +671,31 @@ async function handleTextMessage(ctx) {
 
   const uid = ctx.from.id;
 
-  if (pendingInstallCount.has(uid))    { await handleInstallmentCountInput(ctx, text); return; }
-  if (pendingSubCount.has(uid))         { await handleSubscriptionCountInput(ctx, text); return; }
-  if (pendingSubBillingDay.has(uid))    { await handleSubBillingDayInput(ctx, text); return; }
-  if (pendingCardNameInput.has(uid))    { await handleCardNameInput(ctx, text); return; }
-  if (pendingCardDueDayInput.has(uid))  { await handleCardDueDayInput(ctx, text); return; }
+  if (pendingInstallCount.has(uid))      { await handleInstallmentCountInput(ctx, text); return; }
+  if (pendingSubCount.has(uid))           { await handleSubscriptionCountInput(ctx, text); return; }
+  if (pendingSubBillingDay.has(uid))      { await handleSubBillingDayInput(ctx, text); return; }
+  if (pendingVariableBillDay.has(uid))    { await handleVariableBillDayInput(ctx, text); return; }
+  if (pendingCardNameInput.has(uid))      { await handleCardNameInput(ctx, text); return; }
+  if (pendingCardDueDayInput.has(uid))    { await handleCardDueDayInput(ctx, text); return; }
+
+  // Resposta de valor para lembrete de conta variável
+  const billPending = pendingBillAmount.get(uid);
+  if (billPending) {
+    await handlePendingBillAmount(ctx, text, billPending);
+    return;
+  }
+  // Fallback DB (após restart do bot)
+  try {
+    const user = getOrCreateUser(uid, ctx.from.first_name, ctx.from.username);
+    const dbBill = getUnresolvedPendingBill(user.id);
+    if (dbBill) {
+      await handlePendingBillAmount(ctx, text, {
+        pendingBillId: dbBill.id, subId: dbBill.subscription_id,
+        subName: dbBill.sub_name, category: dbBill.category, dbUserId: user.id,
+      });
+      return;
+    }
+  } catch { /* banco não inicializado ainda */ }
 
   try {
     const user = getOrCreateUser(uid, ctx.from.first_name, ctx.from.username);
@@ -506,7 +739,7 @@ async function handleTextMessage(ctx) {
   }
 }
 
-// ─── Foto ────────────────────────────────────────────────────────────────────
+// ─── Foto, Áudio, PDF ─────────────────────────────────────────────────────────
 
 async function handlePhoto(ctx) {
   try {
@@ -524,8 +757,6 @@ async function handlePhoto(ctx) {
   }
 }
 
-// ─── Áudio ───────────────────────────────────────────────────────────────────
-
 async function handleVoice(ctx) {
   try {
     if (!process.env.GEMINI_API_KEY) { await ctx.reply('⚙️ IA não configurada.'); return; }
@@ -533,7 +764,7 @@ async function handleVoice(ctx) {
     const { file_id, mime_type } = ctx.message.voice;
     const base64 = await downloadTelegramFile(file_id);
     const parsed = await analyzeAudio(base64, mime_type || 'audio/ogg');
-    if (!parsed) { await ctx.reply('😬 Não consegui extrair uma transação do áudio.', { parse_mode: 'Markdown' }); return; }
+    if (!parsed) { await ctx.reply('😬 Não consegui extrair uma transação do áudio.'); return; }
     const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
     if (parsed.confidence >= 0.6) {
       await saveAndReply(ctx, parsed, '[áudio]', user.id);
@@ -556,8 +787,6 @@ async function handleVoice(ctx) {
     await ctx.reply('❌ Erro ao analisar o áudio. Tente novamente.');
   }
 }
-
-// ─── PDF ─────────────────────────────────────────────────────────────────────
 
 async function handleDocument(ctx) {
   try {
@@ -661,6 +890,13 @@ async function handleConfirmCallback(ctx) {
         const skipPayment = await handleSubscriptionCheck(ctx, pending.parsed, saveResult.transactionId, pending.userId);
         if (skipPayment) return;
       }
+
+      const variableService = detectVariableService(pending.parsed.description);
+      if (variableService) {
+        const skipPayment = await handleVariableBillCheck(ctx, pending.parsed, saveResult.transactionId, pending.userId, variableService);
+        if (skipPayment) return;
+      }
+
       await askPaymentMethod(ctx, saveResult.transactionId, pending.parsed.amount, pending.parsed.category, pending.parsed.description);
     }
   } catch (error) {
@@ -678,42 +914,6 @@ async function handleCancelCallback(ctx) {
   }
 }
 
-// ─── Dia de cobrança da assinatura ───────────────────────────────────────────
-
-async function handleSubBillingDayInput(ctx, text) {
-  const userId = ctx.from.id;
-  const pending = pendingSubBillingDay.get(userId);
-  const day = parseInt(text.trim(), 10);
-
-  if (isNaN(day) || day < 1 || day > 31) {
-    await ctx.reply('😬 Dia inválido. Digite um número entre 1 e 31.');
-    return;
-  }
-
-  pendingSubBillingDay.delete(userId);
-
-  if (pending.subId) {
-    // Atualizar assinatura existente sem billing_day
-    updateSubscriptionBillingDay(pending.subId, day);
-    await ctx.reply(
-      `📅 Perfeito! Todo dia *${day}* vou registrar o *${pending.displayName}* automaticamente.\nComo se você fosse cancelar algum dia 😏`,
-      { parse_mode: 'Markdown' }
-    );
-  } else {
-    // Salvar nova assinatura com billing_day
-    saveSubscription(
-      pending.dbUserId, pending.displayName,
-      pending.totalAmount, pending.splitWith, pending.myAmount, pending.isSplit, day
-    );
-    await ctx.reply(
-      `📅 Perfeito! Todo dia *${day}* vou registrar o *${pending.displayName}* automaticamente.\nComo se você fosse cancelar algum dia 😏`,
-      { parse_mode: 'Markdown' }
-    );
-  }
-
-  await askPaymentMethod(ctx, pending.transactionId, pending.myAmount, 'Assinaturas', pending.displayName);
-}
-
 // ─── Cancelamento de assinatura ───────────────────────────────────────────────
 
 async function handleSubCancel(ctx) {
@@ -722,7 +922,6 @@ async function handleSubCancel(ctx) {
     const subId = Number(ctx.match[1]);
     const sub = getSubscriptionById(subId);
     if (!sub) { await ctx.editMessageText('❌ Assinatura não encontrada.'); return; }
-
     await ctx.reply(
       `Cancelar o *${sub.name}*? Finalmente! 🎉`,
       {
@@ -736,7 +935,7 @@ async function handleSubCancel(ctx) {
       }
     );
   } catch (error) {
-    console.error('[FinBot ERROR] Erro ao iniciar cancelamento de assinatura:', error.message);
+    console.error('[FinBot ERROR] Erro ao iniciar cancelamento:', error.message);
   }
 }
 
@@ -746,7 +945,6 @@ async function handleSubCancelConfirm(ctx) {
     const subId = Number(ctx.match[1]);
     const sub = getSubscriptionById(subId);
     if (!sub) { await ctx.editMessageText('❌ Assinatura não encontrada.'); return; }
-
     deactivateSubscription(subId);
     await ctx.editMessageText(
       `✅ *${sub.name}* cancelado!\n\n_${formatCurrency(sub.my_amount)}/mês de volta ao bolso. Quem sabe por quanto tempo. 😏_`,
@@ -763,7 +961,7 @@ async function handleSubCancelKeep(ctx) {
     const subId = Number(ctx.match[1]);
     const sub = getSubscriptionById(subId);
     await ctx.editMessageText(
-      `👍 *${sub?.name || 'Assinatura'}* mantida.\n\n_Coragem de cancelar faltou, não faltou. 🤡_`,
+      `👍 *${sub?.name || 'Assinatura'}* mantida.\n\n_Coragem de cancelar faltou. 🤡_`,
       { parse_mode: 'Markdown' }
     );
   } catch (error) {

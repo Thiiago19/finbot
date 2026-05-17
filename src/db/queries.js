@@ -317,19 +317,26 @@ export function getSubscription(userId, name) {
   ).get(userId, name);
 }
 
-export function saveSubscription(userId, name, totalAmount, splitWith, myAmount, isSplit, billingDay = null) {
+export function saveSubscription(userId, name, totalAmount, splitWith, myAmount, isSplit, billingDay = null, isVariable = false, defaultCategory = 'Assinaturas') {
   const db = getDatabase();
   db.prepare(
-    `INSERT INTO subscriptions (user_id, name, total_amount, split_with, my_amount, is_split, billing_day, is_active)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+    `INSERT INTO subscriptions (user_id, name, total_amount, split_with, my_amount, is_split, billing_day, is_active, is_variable, default_category)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
      ON CONFLICT(user_id, name) DO UPDATE SET
        total_amount = excluded.total_amount,
        split_with = excluded.split_with,
        my_amount = excluded.my_amount,
        is_split = excluded.is_split,
        billing_day = COALESCE(excluded.billing_day, billing_day),
+       is_variable = excluded.is_variable,
+       default_category = excluded.default_category,
        is_active = 1`
-  ).run(userId, name, totalAmount, splitWith, myAmount, isSplit ? 1 : 0, billingDay);
+  ).run(userId, name, totalAmount, splitWith, myAmount, isSplit ? 1 : 0, billingDay, isVariable ? 1 : 0, defaultCategory);
+}
+
+export function updateSubscriptionAmount(subId, newAmount) {
+  const db = getDatabase();
+  db.prepare('UPDATE subscriptions SET my_amount = ? WHERE id = ?').run(newAmount, subId);
 }
 
 export function getAllSubscriptions(userId) {
@@ -376,14 +383,40 @@ export function getActiveSubscriptionsForBilling() {
   ).all();
 }
 
-export function insertSubscriptionTransaction(userId, name, amount) {
+export function insertSubscriptionTransaction(userId, name, amount, category = 'Assinaturas') {
   const db = getDatabase();
   const result = db.prepare(
     `INSERT INTO transactions
        (user_id, type, amount, category, description, raw_message, payment_method, installments, installment_number)
-     VALUES (?, 'expense', ?, 'Assinaturas', ?, '[agendado]', 'debito', 1, 1)`
-  ).run(userId, amount, name);
+     VALUES (?, 'expense', ?, ?, ?, '[agendado]', 'debito', 1, 1)`
+  ).run(userId, amount, category, name);
   return result.lastInsertRowid;
+}
+
+// ─── Pending bills (contas variáveis aguardando valor) ───────────────────────
+
+export function insertPendingBill(userId, subscriptionId, dueDate, category) {
+  const db = getDatabase();
+  const result = db.prepare(
+    `INSERT INTO pending_bills (user_id, subscription_id, due_date, category) VALUES (?, ?, ?, ?)`
+  ).run(userId, subscriptionId, dueDate, category || 'Moradia');
+  return result.lastInsertRowid;
+}
+
+export function getUnresolvedPendingBill(userId) {
+  const db = getDatabase();
+  return db.prepare(
+    `SELECT pb.id, pb.subscription_id, pb.category, s.name as sub_name
+     FROM pending_bills pb
+     JOIN subscriptions s ON pb.subscription_id = s.id
+     WHERE pb.user_id = ? AND pb.resolved_at IS NULL
+     ORDER BY pb.reminder_sent_at DESC LIMIT 1`
+  ).get(userId);
+}
+
+export function resolvePendingBill(pendingBillId) {
+  const db = getDatabase();
+  db.prepare('UPDATE pending_bills SET resolved_at = CURRENT_TIMESTAMP WHERE id = ?').run(pendingBillId);
 }
 
 export function updateTransactionAmount(transactionId, newAmount) {

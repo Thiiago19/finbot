@@ -175,6 +175,68 @@ export function formatMonthlySummary(data, previousData, insightText, paymentBre
   return msg;
 }
 
+const BILL_EMOJIS = [
+  [['internet', 'fibra', 'banda larga', 'net', 'vivo fibra', 'tim live', 'oi fibra', 'claro net'], '🌐'],
+  [['energia', 'cpfl', 'enel', 'cemig', 'copel', 'luz'], '⚡'],
+  [['água', 'saneamento', 'sabesp', 'embasa'], '💧'],
+  [['gás', 'comgás'], '🔥'],
+  [['aluguel'], '🏠'], [['condomínio'], '🏢'],
+  [['plano de saúde', 'convênio', 'unimed', 'amil', 'sulamerica', 'bradesco saúde'], '🏥'],
+  [['academia', 'smartfit', 'bodytech'], '💪'],
+  [['seguro'], '🛡️'],
+  [['celular', 'plano celular'], '📱'],
+];
+
+function getBillEmoji(name) {
+  const low = name.toLowerCase();
+  for (const [keys, emoji] of BILL_EMOJIS) {
+    if (keys.some((k) => low.includes(k))) return emoji;
+  }
+  return '📋';
+}
+
+export function formatContas(fixedSubs, variableSubs) {
+  if (fixedSubs.length === 0 && variableSubs.length === 0) {
+    return '📋 *Suas contas fixas mensais*\n\nNenhuma conta recorrente cadastrada.\nLiberdade ou esquecimento — não sei dizer. 🤷';
+  }
+
+  let msg = '📋 *Suas contas fixas mensais*\n\n';
+
+  if (fixedSubs.length > 0) {
+    msg += `🔌 *Valor fixo (automático):*\n`;
+    for (const sub of fixedSubs) {
+      const SERVICE_EMOJIS = { spotify: '🎵', netflix: '🎬', disney: '🏰', max: '🎥', globoplay: '📡', amazon: '📦', youtube: '▶️', apple: '🍎', paramount: '🌟', deezer: '🎶' };
+      const low = sub.name.toLowerCase();
+      const emoji = Object.entries(SERVICE_EMOJIS).find(([k]) => low.includes(k))?.[1] || '📺';
+      const day = sub.billing_day ? `todo dia ${sub.billing_day}` : '_sem data_';
+      msg += `${emoji} ${sub.name} · ${formatCurrency(sub.my_amount)} · ${day}\n`;
+    }
+    msg += '\n';
+  }
+
+  if (variableSubs.length > 0) {
+    msg += `📊 *Valor variável (lembrete):*\n`;
+    for (const sub of variableSubs) {
+      const emoji = getBillEmoji(sub.name);
+      const day = sub.billing_day ? `vence dia ${sub.billing_day}` : '_sem data_';
+      const last = sub.my_amount > 0 ? `última: ${formatCurrency(sub.my_amount)}` : '_sem registro_';
+      msg += `${emoji} ${sub.name} · ${day} · ${last}\n`;
+    }
+    msg += '\n';
+  }
+
+  const totalFixed = fixedSubs.reduce((s, sub) => s + sub.my_amount, 0);
+  const validVariable = variableSubs.filter((s) => s.my_amount > 0);
+  const avgVariable = validVariable.length > 0
+    ? validVariable.reduce((s, sub) => s + sub.my_amount, 0) / validVariable.length
+    : 0;
+
+  if (totalFixed > 0) msg += `💸 Total fixo/mês: *${formatCurrency(totalFixed)}*\n`;
+  if (avgVariable > 0) msg += `📊 Média variável/mês: *${formatCurrency(avgVariable)}*`;
+
+  return msg.trim();
+}
+
 export function formatSubscriptions(subs) {
   if (subs.length === 0) {
     return '📺 *Suas assinaturas*\n\nNenhuma assinatura ativa. Raro. Parabéns. 👏';
