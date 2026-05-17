@@ -5,6 +5,7 @@ import { initDatabase, closeDatabase } from './db/database.js';
 import { registerCommands } from './bot/commands.js';
 import { registerHandlers } from './bot/handlers.js';
 import { startNotificationJob } from './services/notifications.js';
+import { startSubscriptionScheduler } from './services/scheduler.js';
 
 // Servidor HTTP iniciado imediatamente — antes de qualquer outra coisa
 const port = process.env.PORT || 3000;
@@ -42,6 +43,7 @@ async function main() {
   await bot.launch();
   console.log('[FinBot] Bot iniciado com sucesso! Aguardando mensagens...');
   startNotificationJob(bot);
+  startSubscriptionScheduler(bot);
 }
 
 function shutdown(bot) {

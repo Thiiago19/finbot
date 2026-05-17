@@ -1,7 +1,7 @@
 import {
   getOrCreateUser, getMonthlySummary, getPreviousMonthSummary, getActiveGoals,
   getCreditFatura, getFutureInstallments, getPaymentMethodBreakdown,
-  getAllSubscriptions, getAllCards, getFaturaByCard,
+  getAllActiveSubscriptions, getAllCards, getFaturaByCard,
 } from '../db/queries.js';
 import { Markup } from 'telegraf';
 import { getMonthlyInsights } from '../services/insights.js';
@@ -223,8 +223,22 @@ async function handleFatura(ctx) {
 async function handleAssinaturas(ctx) {
   try {
     const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
-    const subs = getAllSubscriptions(user.id);
-    await ctx.reply(formatSubscriptions(subs), { parse_mode: 'Markdown' });
+    const subs = getAllActiveSubscriptions(user.id);
+    const text = formatSubscriptions(subs);
+
+    if (subs.length === 0) {
+      await ctx.reply(text, { parse_mode: 'Markdown' });
+      return;
+    }
+
+    const cancelButtons = subs.map((s) => [
+      Markup.button.callback(`❌ Cancelar ${s.name}`, `sub_cncl_${s.id}`),
+    ]);
+
+    await ctx.reply(text, {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard(cancelButtons),
+    });
   } catch (error) {
     console.error('[FinBot ERROR] Erro no /assinaturas:', error.message);
     await ctx.reply('❌ Não consegui listar as assinaturas agora. Tente novamente.');

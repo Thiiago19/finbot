@@ -49,6 +49,9 @@ function runMigrations(db) {
     `ALTER TABLE transactions ADD COLUMN installment_group_id TEXT`,
     `ALTER TABLE transactions ADD COLUMN total_amount REAL`,
     `ALTER TABLE transactions ADD COLUMN card_name TEXT`,
+    `ALTER TABLE subscriptions ADD COLUMN billing_day INTEGER`,
+    `ALTER TABLE subscriptions ADD COLUMN last_billed_at DATE`,
+    `ALTER TABLE subscriptions ADD COLUMN is_active INTEGER DEFAULT 1`,
     `CREATE TABLE IF NOT EXISTS subscriptions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,

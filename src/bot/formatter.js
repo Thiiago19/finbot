@@ -177,7 +177,7 @@ export function formatMonthlySummary(data, previousData, insightText, paymentBre
 
 export function formatSubscriptions(subs) {
   if (subs.length === 0) {
-    return '📺 *Suas assinaturas*\n\nNenhuma assinatura cadastrada. Raro. Parabéns. 👏';
+    return '📺 *Suas assinaturas*\n\nNenhuma assinatura ativa. Raro. Parabéns. 👏';
   }
   const total = subs.reduce((s, sub) => s + sub.my_amount, 0);
   const yearly = total * 12;
@@ -189,17 +189,20 @@ export function formatSubscriptions(subs) {
     return '📺';
   };
 
-  let msg = `📺 *Suas assinaturas* _(porque uma não era suficiente)_\n━━━━━━━━━━━━━━\n`;
+  let msg = `📺 *Suas assinaturas*\n━━━━━━━━━━━━━━\n`;
   for (const sub of subs) {
     const emoji = getEmoji(sub.name);
-    const label = sub.is_split
-      ? `_(dividido por ${sub.split_with})_`
-      : `_(só você mesmo)_`;
-    msg += `${emoji} ${sub.name} · ${formatCurrency(sub.my_amount)} ${label}\n`;
+    const dayLabel = sub.billing_day ? `todo dia ${sub.billing_day}` : '_dia não definido_';
+    msg += `${emoji} *${sub.name}* · ${formatCurrency(sub.my_amount)} · ${dayLabel}\n`;
+    if (sub.is_split) {
+      msg += `   _(dividido por ${sub.split_with} — ${formatCurrency(sub.total_amount)} total)_\n`;
+    } else {
+      msg += `   _(só você mesmo, corajoso)_\n`;
+    }
   }
   msg += `━━━━━━━━━━━━━━\n`;
   msg += `Total: *${formatCurrency(total)}/mês*\n`;
-  msg += `💸 *${formatCurrency(yearly)}/ano* indo embora em entretenimento`;
+  msg += `📅 *${formatCurrency(yearly)}/ano* em entretenimento 😏`;
   return msg;
 }
 

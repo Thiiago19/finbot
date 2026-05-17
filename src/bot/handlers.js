@@ -3,6 +3,7 @@ import {
   getOrCreateUser, deleteAllTransactions,
   updateTransactionPayment, createInstallmentTransactions, updateTransactionAmount,
   getSubscription, saveSubscription,
+  updateSubscriptionBillingDay, deactivateSubscription, getSubscriptionById,
   getAllCards, saveCard, updateTransactionCard,
 } from '../db/queries.js';
 import { processMessage, saveTransaction } from '../services/transactions.js';
@@ -42,8 +43,9 @@ const pendingPdfImports    = new Map(); // importação PDF
 const pendingPaymentUpdate = new Map(); // transactionId → dados método pagamento
 const pendingInstallCount  = new Map(); // userId → aguarda nº parcelas (texto)
 const pendingSubSplit      = new Map(); // transactionId → aguarda solo/dividido
-const pendingSubCount      = new Map(); // userId → aguarda nº pessoas (texto)
-const pendingCardNameInput = new Map(); // userId → aguarda nome do cartão (texto)
+const pendingSubCount        = new Map(); // userId → aguarda nº pessoas (texto)
+const pendingSubBillingDay   = new Map(); // userId → aguarda dia de cobrança (texto)
+const pendingCardNameInput   = new Map(); // userId → aguarda nome do cartão (texto)
 const pendingCardDueDayInput = new Map(); // userId → aguarda dia vencimento (texto)
 
 export function registerHandlers(bot) {
@@ -59,6 +61,9 @@ export function registerHandlers(bot) {
   bot.action(/^inst_(av|pr)_(\d+)$/, handleInstallmentChoice);
 
   bot.action(/^sub_(solo|split)_(\d+)$/, handleSubscriptionSplit);
+  bot.action(/^sub_cncl_(\d+)$/, handleSubCancel);
+  bot.action(/^sub_cncl_yes_(\d+)$/, handleSubCancelConfirm);
+  bot.action(/^sub_cncl_no_(\d+)$/, handleSubCancelKeep);
   bot.action(/^card_sel_(\d+)_(\d+)$/, handleCardSelection);
   bot.action(/^card_new_(\d+)$/, handleNewCard);
 
@@ -112,6 +117,18 @@ async function handleSubscriptionCheck(ctx, parsed, transactionId, userId) {
   const sub = getSubscription(userId, display);
 
   if (sub) {
+    if (!sub.billing_day) {
+      // Assinatura sem dia de cobrança cadastrado — perguntar agora
+      pendingSubBillingDay.set(ctx.from.id, {
+        subId: sub.id, transactionId, displayName: sub.name,
+        myAmount: sub.my_amount, isSplit: false, // isSplit irrelevante (não ajusta amount)
+      });
+      await ctx.reply(
+        `Ah, o *${sub.name}* de novo 😏\nMas ainda não sei quando é cobrado. Qual o dia do mês?`,
+        { parse_mode: 'Markdown' }
+      );
+      return true; // fluxo de billing_day vai pedir método de pagamento depois
+    }
     await ctx.reply(
       `Ah, o *${sub.name}* de novo. ${formatCurrency(sub.my_amount)}/mês debitado da sua consciência 😏`,
       { parse_mode: 'Markdown' }
@@ -158,12 +175,15 @@ async function handleSubscriptionSplit(ctx) {
 
     if (choice === 'solo') {
       pendingSubSplit.delete(transactionId);
-      saveSubscription(user.id, pending.display, pending.totalAmount, 1, pending.totalAmount, false);
+      pendingSubBillingDay.set(ctx.from.id, {
+        transactionId, displayName: pending.display,
+        totalAmount: pending.totalAmount, splitWith: 1,
+        myAmount: pending.totalAmount, isSplit: false, dbUserId: user.id,
+      });
       await ctx.editMessageText(
-        `👤 Entendido! Vou registrar *${formatCurrency(pending.totalAmount)}/mês* como sua parte do ${pending.display}. Combinado! 📺`,
+        `👤 Só você! Qual dia do mês o *${pending.display}* é cobrado? _(ex: 15)_`,
         { parse_mode: 'Markdown' }
       );
-      await askPaymentMethod(ctx, transactionId, pending.totalAmount, 'Assinaturas', pending.display);
     } else {
       pendingSubCount.set(ctx.from.id, { transactionId, ...pending, dbUserId: user.id });
       await ctx.editMessageText(
@@ -190,15 +210,18 @@ async function handleSubscriptionCountInput(ctx, text) {
   pendingSubSplit.delete(pending.transactionId);
 
   const myAmount = Math.round((pending.totalAmount / n) * 100) / 100;
-  saveSubscription(pending.dbUserId, pending.display, pending.totalAmount, n, myAmount, true);
   updateTransactionAmount(pending.transactionId, myAmount);
 
+  pendingSubBillingDay.set(userId, {
+    transactionId: pending.transactionId, displayName: pending.display,
+    totalAmount: pending.totalAmount, splitWith: n,
+    myAmount, isSplit: true, dbUserId: pending.dbUserId,
+  });
+
   await ctx.reply(
-    `Entendido! Vou registrar *${formatCurrency(myAmount)}/mês* como sua parte do ${pending.display} _(dividido por ${n})_. Combinado! 📺`,
+    `👥 Dividido por ${n}! E qual dia do mês o *${pending.display}* é cobrado? _(ex: 15)_`,
     { parse_mode: 'Markdown' }
   );
-
-  await askPaymentMethod(ctx, pending.transactionId, myAmount, 'Assinaturas', pending.display);
 }
 
 // ─── Método de pagamento ──────────────────────────────────────────────────────
@@ -419,6 +442,7 @@ async function handleTextMessage(ctx) {
 
   if (pendingInstallCount.has(uid))    { await handleInstallmentCountInput(ctx, text); return; }
   if (pendingSubCount.has(uid))         { await handleSubscriptionCountInput(ctx, text); return; }
+  if (pendingSubBillingDay.has(uid))    { await handleSubBillingDayInput(ctx, text); return; }
   if (pendingCardNameInput.has(uid))    { await handleCardNameInput(ctx, text); return; }
   if (pendingCardDueDayInput.has(uid))  { await handleCardDueDayInput(ctx, text); return; }
 
@@ -633,6 +657,99 @@ async function handleCancelCallback(ctx) {
     await ctx.editMessageText('❌ *Transação cancelada.*\n\nSe quiser registrar, me envie a mensagem novamente.', { parse_mode: 'Markdown' });
   } catch (error) {
     console.error('[FinBot ERROR] Erro ao cancelar transação:', error.message);
+  }
+}
+
+// ─── Dia de cobrança da assinatura ───────────────────────────────────────────
+
+async function handleSubBillingDayInput(ctx, text) {
+  const userId = ctx.from.id;
+  const pending = pendingSubBillingDay.get(userId);
+  const day = parseInt(text.trim(), 10);
+
+  if (isNaN(day) || day < 1 || day > 31) {
+    await ctx.reply('😬 Dia inválido. Digite um número entre 1 e 31.');
+    return;
+  }
+
+  pendingSubBillingDay.delete(userId);
+
+  if (pending.subId) {
+    // Atualizar assinatura existente sem billing_day
+    updateSubscriptionBillingDay(pending.subId, day);
+    await ctx.reply(
+      `📅 Perfeito! Todo dia *${day}* vou registrar o *${pending.displayName}* automaticamente.\nComo se você fosse cancelar algum dia 😏`,
+      { parse_mode: 'Markdown' }
+    );
+  } else {
+    // Salvar nova assinatura com billing_day
+    saveSubscription(
+      pending.dbUserId, pending.displayName,
+      pending.totalAmount, pending.splitWith, pending.myAmount, pending.isSplit, day
+    );
+    await ctx.reply(
+      `📅 Perfeito! Todo dia *${day}* vou registrar o *${pending.displayName}* automaticamente.\nComo se você fosse cancelar algum dia 😏`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  await askPaymentMethod(ctx, pending.transactionId, pending.myAmount, 'Assinaturas', pending.displayName);
+}
+
+// ─── Cancelamento de assinatura ───────────────────────────────────────────────
+
+async function handleSubCancel(ctx) {
+  try {
+    await ctx.answerCbQuery();
+    const subId = Number(ctx.match[1]);
+    const sub = getSubscriptionById(subId);
+    if (!sub) { await ctx.editMessageText('❌ Assinatura não encontrada.'); return; }
+
+    await ctx.reply(
+      `Cancelar o *${sub.name}*? Finalmente! 🎉`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback('✅ Confirmar', `sub_cncl_yes_${subId}`),
+            Markup.button.callback('❌ Manter', `sub_cncl_no_${subId}`),
+          ],
+        ]),
+      }
+    );
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro ao iniciar cancelamento de assinatura:', error.message);
+  }
+}
+
+async function handleSubCancelConfirm(ctx) {
+  try {
+    await ctx.answerCbQuery();
+    const subId = Number(ctx.match[1]);
+    const sub = getSubscriptionById(subId);
+    if (!sub) { await ctx.editMessageText('❌ Assinatura não encontrada.'); return; }
+
+    deactivateSubscription(subId);
+    await ctx.editMessageText(
+      `✅ *${sub.name}* cancelado!\n\n_${formatCurrency(sub.my_amount)}/mês de volta ao bolso. Quem sabe por quanto tempo. 😏_`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro ao confirmar cancelamento:', error.message);
+  }
+}
+
+async function handleSubCancelKeep(ctx) {
+  try {
+    await ctx.answerCbQuery('Mantido!');
+    const subId = Number(ctx.match[1]);
+    const sub = getSubscriptionById(subId);
+    await ctx.editMessageText(
+      `👍 *${sub?.name || 'Assinatura'}* mantida.\n\n_Coragem de cancelar faltou, não faltou. 🤡_`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro ao manter assinatura:', error.message);
   }
 }
 

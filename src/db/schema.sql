@@ -59,6 +59,9 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   split_with INTEGER DEFAULT 1,
   my_amount REAL NOT NULL,
   is_split INTEGER DEFAULT 0,
+  billing_day INTEGER,
+  last_billed_at DATE,
+  is_active INTEGER DEFAULT 1,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id),
   UNIQUE(user_id, name)

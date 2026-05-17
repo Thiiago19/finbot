@@ -317,17 +317,19 @@ export function getSubscription(userId, name) {
   ).get(userId, name);
 }
 
-export function saveSubscription(userId, name, totalAmount, splitWith, myAmount, isSplit) {
+export function saveSubscription(userId, name, totalAmount, splitWith, myAmount, isSplit, billingDay = null) {
   const db = getDatabase();
   db.prepare(
-    `INSERT INTO subscriptions (user_id, name, total_amount, split_with, my_amount, is_split)
-     VALUES (?, ?, ?, ?, ?, ?)
+    `INSERT INTO subscriptions (user_id, name, total_amount, split_with, my_amount, is_split, billing_day, is_active)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 1)
      ON CONFLICT(user_id, name) DO UPDATE SET
        total_amount = excluded.total_amount,
        split_with = excluded.split_with,
        my_amount = excluded.my_amount,
-       is_split = excluded.is_split`
-  ).run(userId, name, totalAmount, splitWith, myAmount, isSplit ? 1 : 0);
+       is_split = excluded.is_split,
+       billing_day = COALESCE(excluded.billing_day, billing_day),
+       is_active = 1`
+  ).run(userId, name, totalAmount, splitWith, myAmount, isSplit ? 1 : 0, billingDay);
 }
 
 export function getAllSubscriptions(userId) {
@@ -335,6 +337,53 @@ export function getAllSubscriptions(userId) {
   return db.prepare(
     `SELECT * FROM subscriptions WHERE user_id = ? ORDER BY name`
   ).all(userId);
+}
+
+export function getAllActiveSubscriptions(userId) {
+  const db = getDatabase();
+  return db.prepare(
+    `SELECT * FROM subscriptions WHERE user_id = ? AND is_active = 1 ORDER BY name`
+  ).all(userId);
+}
+
+export function getSubscriptionById(subId) {
+  const db = getDatabase();
+  return db.prepare('SELECT * FROM subscriptions WHERE id = ?').get(subId);
+}
+
+export function updateSubscriptionBillingDay(subId, billingDay) {
+  const db = getDatabase();
+  db.prepare('UPDATE subscriptions SET billing_day = ? WHERE id = ?').run(billingDay, subId);
+}
+
+export function updateSubscriptionBilledAt(subId, dateStr) {
+  const db = getDatabase();
+  db.prepare('UPDATE subscriptions SET last_billed_at = ? WHERE id = ?').run(dateStr, subId);
+}
+
+export function deactivateSubscription(subId) {
+  const db = getDatabase();
+  db.prepare('UPDATE subscriptions SET is_active = 0 WHERE id = ?').run(subId);
+}
+
+export function getActiveSubscriptionsForBilling() {
+  const db = getDatabase();
+  return db.prepare(
+    `SELECT s.*, u.telegram_id
+     FROM subscriptions s
+     JOIN users u ON s.user_id = u.id
+     WHERE s.is_active = 1 AND s.billing_day IS NOT NULL`
+  ).all();
+}
+
+export function insertSubscriptionTransaction(userId, name, amount) {
+  const db = getDatabase();
+  const result = db.prepare(
+    `INSERT INTO transactions
+       (user_id, type, amount, category, description, raw_message, payment_method, installments, installment_number)
+     VALUES (?, 'expense', ?, 'Assinaturas', ?, '[agendado]', 'debito', 1, 1)`
+  ).run(userId, amount, name);
+  return result.lastInsertRowid;
 }
 
 export function updateTransactionAmount(transactionId, newAmount) {
