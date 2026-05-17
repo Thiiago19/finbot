@@ -308,6 +308,96 @@ export function getPaymentMethodBreakdown(userId, year, month) {
   ).all(userId, String(year), String(month).padStart(2, '0'));
 }
 
+// ─── Assinaturas ────────────────────────────────────────────────────────────
+
+export function getSubscription(userId, name) {
+  const db = getDatabase();
+  return db.prepare(
+    `SELECT * FROM subscriptions WHERE user_id = ? AND LOWER(name) = LOWER(?)`
+  ).get(userId, name);
+}
+
+export function saveSubscription(userId, name, totalAmount, splitWith, myAmount, isSplit) {
+  const db = getDatabase();
+  db.prepare(
+    `INSERT INTO subscriptions (user_id, name, total_amount, split_with, my_amount, is_split)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(user_id, name) DO UPDATE SET
+       total_amount = excluded.total_amount,
+       split_with = excluded.split_with,
+       my_amount = excluded.my_amount,
+       is_split = excluded.is_split`
+  ).run(userId, name, totalAmount, splitWith, myAmount, isSplit ? 1 : 0);
+}
+
+export function getAllSubscriptions(userId) {
+  const db = getDatabase();
+  return db.prepare(
+    `SELECT * FROM subscriptions WHERE user_id = ? ORDER BY name`
+  ).all(userId);
+}
+
+export function updateTransactionAmount(transactionId, newAmount) {
+  const db = getDatabase();
+  db.prepare('UPDATE transactions SET amount = ? WHERE id = ?').run(newAmount, transactionId);
+}
+
+// ─── Cartões ──────────────────────────────────────────────────────────────────
+
+export function getAllCards(userId) {
+  const db = getDatabase();
+  return db.prepare('SELECT * FROM cards WHERE user_id = ? ORDER BY name').all(userId);
+}
+
+export function saveCard(userId, name, dueDay) {
+  const db = getDatabase();
+  const result = db.prepare(
+    `INSERT INTO cards (user_id, name, due_day) VALUES (?, ?, ?)`
+  ).run(userId, name, dueDay);
+  return result.lastInsertRowid;
+}
+
+export function updateTransactionCard(transactionId, cardName) {
+  const db = getDatabase();
+  db.prepare('UPDATE transactions SET card_name = ? WHERE id = ?').run(cardName, transactionId);
+}
+
+export function getFaturaByCard(userId, year, month) {
+  const db = getDatabase();
+  const y = String(year);
+  const m = String(month).padStart(2, '0');
+  return db.prepare(
+    `SELECT COALESCE(card_name, 'Sem cartão') as card_name, SUM(amount) as total
+     FROM transactions
+     WHERE user_id = ? AND type = 'expense' AND payment_method = 'credito'
+       AND strftime('%Y', created_at) = ? AND strftime('%m', created_at) = ?
+     GROUP BY COALESCE(card_name, 'Sem cartão')
+     ORDER BY total DESC`
+  ).all(userId, y, m);
+}
+
+export function getUsersWithCardsDueSoon(targetDay) {
+  const db = getDatabase();
+  return db.prepare(
+    `SELECT c.id, c.name as card_name, c.due_day, c.user_id, u.telegram_id
+     FROM cards c JOIN users u ON c.user_id = u.id
+     WHERE c.due_day = ?`
+  ).all(targetDay);
+}
+
+export function getCreditFaturaForCard(userId, cardName, year, month) {
+  const db = getDatabase();
+  const y = String(year);
+  const m = String(month).padStart(2, '0');
+  const result = db.prepare(
+    `SELECT COALESCE(SUM(amount), 0) as total FROM transactions
+     WHERE user_id = ? AND type = 'expense' AND payment_method = 'credito'
+       AND (card_name = ? OR (card_name IS NULL AND ? = 'Sem cartão'))
+       AND strftime('%Y', created_at) = ? AND strftime('%m', created_at) = ?`
+  ).get(userId, cardName, cardName, y, m);
+  return result?.total || 0;
+}
+
 export function getRecentTransactionsForInsights(userId, limit = 50) {
   const db = getDatabase();
   return db

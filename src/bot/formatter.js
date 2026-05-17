@@ -63,7 +63,7 @@ const PAYMENT_EMOJIS = { credito: '💳', debito: '🏦', pix: '⚡', dinheiro: 
 const PAYMENT_LABELS = { credito: 'Crédito', debito: 'Débito', pix: 'Pix', dinheiro: 'Dinheiro', outro: 'Outro' };
 const MONTH_NAMES = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 
-export function formatFatura({ avista, parcelas, totalParcelas, total }) {
+export function formatFatura({ avista, parcelas, totalParcelas, total }, byCard = []) {
   const now = new Date();
   const monthName = now.toLocaleString('pt-BR', { month: 'long' });
   const cap = monthName.charAt(0).toUpperCase() + monthName.slice(1);
@@ -82,6 +82,10 @@ export function formatFatura({ avista, parcelas, totalParcelas, total }) {
   }
 
   msg += `Total: *${formatCurrency(total)}* 💸\n`;
+  if (byCard.length > 1) {
+    msg += `\n💳 *Por cartão:*\n`;
+    for (const c of byCard) msg += `  💳 ${c.card_name}: ${formatCurrency(c.total)}\n`;
+  }
   if (total === 0) msg += `\n_Zerei a fatura? Ou não usou o crédito? Respeito. 👏_`;
   return msg;
 }
@@ -169,6 +173,45 @@ export function formatMonthlySummary(data, previousData, insightText, paymentBre
   }
 
   return msg;
+}
+
+export function formatSubscriptions(subs) {
+  if (subs.length === 0) {
+    return '📺 *Suas assinaturas*\n\nNenhuma assinatura cadastrada. Raro. Parabéns. 👏';
+  }
+  const total = subs.reduce((s, sub) => s + sub.my_amount, 0);
+  const yearly = total * 12;
+
+  const SERVICE_EMOJIS = { spotify: '🎵', netflix: '🎬', disney: '🏰', max: '🎥', globoplay: '📡', amazon: '📦', youtube: '▶️', apple: '🍎', paramount: '🌟', deezer: '🎶' };
+  const getEmoji = (name) => {
+    const low = name.toLowerCase();
+    for (const [k, e] of Object.entries(SERVICE_EMOJIS)) if (low.includes(k)) return e;
+    return '📺';
+  };
+
+  let msg = `📺 *Suas assinaturas* _(porque uma não era suficiente)_\n━━━━━━━━━━━━━━\n`;
+  for (const sub of subs) {
+    const emoji = getEmoji(sub.name);
+    const label = sub.is_split
+      ? `_(dividido por ${sub.split_with})_`
+      : `_(só você mesmo)_`;
+    msg += `${emoji} ${sub.name} · ${formatCurrency(sub.my_amount)} ${label}\n`;
+  }
+  msg += `━━━━━━━━━━━━━━\n`;
+  msg += `Total: *${formatCurrency(total)}/mês*\n`;
+  msg += `💸 *${formatCurrency(yearly)}/ano* indo embora em entretenimento`;
+  return msg;
+}
+
+export function formatCards(cards) {
+  if (cards.length === 0) {
+    return '💳 *Seus cartões*\n\nNenhum cartão cadastrado ainda.\nAdicione um ao fazer um gasto no crédito!';
+  }
+  let msg = `💳 *Seus cartões*\n━━━━━━━━━━━━━━\n`;
+  for (const c of cards) {
+    msg += `💳 *${c.name}* — vencimento dia ${c.due_day}\n`;
+  }
+  return msg.trim();
 }
 
 export function formatInsight(text) {

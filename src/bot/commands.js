@@ -1,6 +1,7 @@
 import {
   getOrCreateUser, getMonthlySummary, getPreviousMonthSummary, getActiveGoals,
   getCreditFatura, getFutureInstallments, getPaymentMethodBreakdown,
+  getAllSubscriptions, getAllCards, getFaturaByCard,
 } from '../db/queries.js';
 import { Markup } from 'telegraf';
 import { getMonthlyInsights } from '../services/insights.js';
@@ -12,6 +13,8 @@ import {
   formatGoal,
   formatFatura,
   formatFutureInstallments,
+  formatSubscriptions,
+  formatCards,
 } from './formatter.js';
 
 export function registerCommands(bot) {
@@ -25,6 +28,8 @@ export function registerCommands(bot) {
   bot.command('limpar', handleLimpar);
   bot.command('fatura', handleFatura);
   bot.command('parcelas', handleParcelas);
+  bot.command('assinaturas', handleAssinaturas);
+  bot.command('cartoes', handleCartoes);
   bot.help(handleAjuda);
 }
 
@@ -207,10 +212,33 @@ async function handleFatura(ctx) {
     const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
     const now = new Date();
     const data = getCreditFatura(user.id, now.getFullYear(), now.getMonth() + 1);
-    await ctx.reply(formatFatura(data), { parse_mode: 'Markdown' });
+    const byCard = getFaturaByCard(user.id, now.getFullYear(), now.getMonth() + 1);
+    await ctx.reply(formatFatura(data, byCard), { parse_mode: 'Markdown' });
   } catch (error) {
     console.error('[FinBot ERROR] Erro no /fatura:', error.message);
     await ctx.reply('❌ Não consegui buscar a fatura agora. Tente novamente.');
+  }
+}
+
+async function handleAssinaturas(ctx) {
+  try {
+    const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
+    const subs = getAllSubscriptions(user.id);
+    await ctx.reply(formatSubscriptions(subs), { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro no /assinaturas:', error.message);
+    await ctx.reply('❌ Não consegui listar as assinaturas agora. Tente novamente.');
+  }
+}
+
+async function handleCartoes(ctx) {
+  try {
+    const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
+    const cards = getAllCards(user.id);
+    await ctx.reply(formatCards(cards), { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro no /cartoes:', error.message);
+    await ctx.reply('❌ Não consegui listar os cartões agora. Tente novamente.');
   }
 }
 

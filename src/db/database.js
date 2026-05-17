@@ -48,6 +48,27 @@ function runMigrations(db) {
     `ALTER TABLE transactions ADD COLUMN installment_number INTEGER DEFAULT 1`,
     `ALTER TABLE transactions ADD COLUMN installment_group_id TEXT`,
     `ALTER TABLE transactions ADD COLUMN total_amount REAL`,
+    `ALTER TABLE transactions ADD COLUMN card_name TEXT`,
+    `CREATE TABLE IF NOT EXISTS subscriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      total_amount REAL NOT NULL,
+      split_with INTEGER DEFAULT 1,
+      my_amount REAL NOT NULL,
+      is_split INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      UNIQUE(user_id, name)
+    )`,
+    `CREATE TABLE IF NOT EXISTS cards (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      due_day INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    )`,
   ];
   for (const sql of newColumns) {
     try { db.exec(sql); } catch { /* coluna já existe */ }
