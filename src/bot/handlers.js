@@ -57,8 +57,8 @@ const VARIABLE_SERVICES = [
   ['sulamerica', 'SulAmérica'], ['bradesco saúde', 'Bradesco Saúde'],
   ['smartfit', 'SmartFit'], ['bodytech', 'Bodytech'], ['academia', 'Academia'],
   ['seguro', 'Seguro'],
-  ['plano celular', 'Plano Celular'], ['conta do celular', 'Plano Celular'],
 ];
+// Plano/conta de celular é Assinatura fixa (não entra aqui como variável)
 
 function detectVariableService(description) {
   if (!description) return null;

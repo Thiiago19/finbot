@@ -11,12 +11,19 @@ Regras de tipo:
 
 Regras de categorização:
 - iFood, Rappi, delivery, restaurante delivery → "Alimentação"
-- Uber, 99, gasolina, combustível, ônibus, metrô, táxi, estacionamento → "Transporte"
+
+TRANSPORTE (apenas deslocamento físico):
+- Uber, 99, táxi, ônibus, metrô, trem, combustível, gasolina, pedágio, estacionamento → "Transporte"
+- IMPORTANTE: Vivo, TIM, Claro, Oi NÃO são transporte quando se referem a plano/conta mensal
+
+ASSINATURAS (serviços recorrentes pagos mensalmente):
+- Netflix, Spotify, Amazon Prime, Disney+, Max, Globoplay, YouTube Premium, Apple TV, Paramount, Apple Music, Deezer, streaming → "Assinaturas"
+- Plano de celular, conta do celular, mensalidade do celular, Vivo (conta/plano/mensalidade), TIM (conta/plano/mensalidade), Claro (conta/plano/mensalidade), Oi (conta/plano/mensalidade) → "Assinaturas"
+- Regra: se mencionar plano, conta, mensalidade ou fatura de operadora de celular = "Assinaturas"
+
 - Aluguel, condomínio, IPTU, luz, água, gás, internet, banda larga, fibra óptica, conta de energia, energia elétrica, CPFL, Enel, Cemig, Copel, Sabesp, Embasa, saneamento, Comgás, NET, Vivo Fibra, TIM Live, Oi Fibra, Claro NET → "Moradia"
-- Farmácia, médico, dentista, plano de saúde, convênio médico, Unimed, Amil, SulAmérica, Bradesco Saúde, hospital, remédio, academia, SmartFit, Bodytech, palestra de saúde → "Saúde"
+- Farmácia, médico, dentista, plano de saúde, convênio médico, Unimed, Amil, SulAmérica, Bradesco Saúde, hospital, remédio, academia, SmartFit, Bodytech → "Saúde"
 - Cinema, bar, restaurante presencial, viagem, hotel, show, teatro → "Lazer"
-- Netflix, Spotify, Amazon Prime, Disney+, YouTube Premium, assinatura, streaming → "Assinaturas"
-- Plano de celular, conta do celular, Vivo (mensal), TIM (mensal), Claro (mensal), Oi (mensal) → "Transporte"
 - Seguro (carro, vida, residencial) → "Outros"
 - Curso, faculdade, livro técnico, escola → "Educação"
 - Supermercado, mercado, feira → "Alimentação"
