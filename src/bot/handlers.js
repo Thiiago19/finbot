@@ -2,7 +2,7 @@ import { Markup } from 'telegraf';
 import {
   getOrCreateUser, deleteAllTransactions,
   updateTransactionPayment, createInstallmentTransactions, updateTransactionAmount,
-  getSubscription, saveSubscription,
+  getSubscription, findSubscriptionByDescription, saveSubscription,
   updateSubscriptionBillingDay, deactivateSubscription, getSubscriptionById,
   updateSubscriptionAmount, insertSubscriptionTransaction,
   insertPendingBill, getUnresolvedPendingBill, resolvePendingBill,
@@ -19,24 +19,17 @@ import {
   formatSarcasticSave,
 } from './formatter.js';
 
-// ─── Serviços de streaming (valor fixo) ──────────────────────────────────────
+// ─── Extração do nome do serviço a partir da descrição da IA ─────────────────
 
-const STREAMING_SERVICES = [
-  ['spotify', 'Spotify'], ['netflix', 'Netflix'], ['disney', 'Disney+'],
-  ['hbo max', 'Max'], ['max', 'Max'], ['globoplay', 'Globoplay'],
-  ['amazon prime', 'Amazon Prime'], ['prime video', 'Amazon Prime'],
-  ['youtube premium', 'YouTube Premium'], ['apple tv', 'Apple TV+'],
-  ['paramount', 'Paramount+'], ['apple music', 'Apple Music'], ['deezer', 'Deezer'],
-];
-
-function detectServiceName(description) {
-  if (!description) return { key: 'assinatura', display: 'Assinatura' };
-  const lower = description.toLowerCase();
-  for (const [key, display] of STREAMING_SERVICES) {
-    if (lower.includes(key)) return { key, display };
-  }
-  const word = description.replace(/[^\w\s]/g, '').split(/\s+/)[0];
-  return { key: word.toLowerCase(), display: word };
+function extractSubscriptionName(description) {
+  if (!description) return 'Serviço';
+  // Remove emojis
+  const clean = description.replace(/\p{Emoji_Presentation}|\p{Emoji}️/gu, '').trim();
+  // Remove sufixos sarcásticos comuns inseridos pela IA
+  const stripped = clean
+    .replace(/\s*(de novo|novamente|outra vez|\(.*?\)|—.*|-\s+.*)/i, '')
+    .trim();
+  return stripped.split(/\s{2,}/)[0].trim() || description.split(' ')[0] || 'Serviço';
 }
 
 // ─── Contas variáveis (internet, energia, água, etc.) ────────────────────────
@@ -104,8 +97,7 @@ const pendingTransactions      = new Map();
 const pendingPdfImports        = new Map();
 const pendingPaymentUpdate     = new Map();
 const pendingInstallCount      = new Map();
-const pendingSubSplit          = new Map();
-const pendingSubCount          = new Map();
+const pendingSubTypeSetup      = new Map(); // transactionId → { serviceName, totalAmount, telegramUserId }
 const pendingSubBillingDay     = new Map();
 const pendingVariableBillSetup = new Map(); // transactionId → dados
 const pendingVariableBillDay   = new Map(); // userId → dados
@@ -124,7 +116,7 @@ export function registerHandlers(bot) {
   bot.action(/^pay_(cred|deb|pix|din)_(\d+)$/, handlePaymentMethod);
   bot.action(/^inst_(av|pr)_(\d+)$/, handleInstallmentChoice);
 
-  bot.action(/^sub_(solo|split)_(\d+)$/, handleSubscriptionSplit);
+  bot.action(/^sub_type_(fix|var|one)_(\d+)$/, handleSubscriptionType);
   bot.action(/^sub_cncl_(\d+)$/, handleSubCancel);
   bot.action(/^sub_cncl_yes_(\d+)$/, handleSubCancelConfirm);
   bot.action(/^sub_cncl_no_(\d+)$/, handleSubCancelKeep);
@@ -185,16 +177,20 @@ async function saveAndReply(ctx, parsed, rawSource, userId) {
   }
 }
 
-// ─── Assinaturas fixas ────────────────────────────────────────────────────────
+// ─── Assinaturas: verificar cadastro ou perguntar tipo ───────────────────────
 
 async function handleSubscriptionCheck(ctx, parsed, transactionId, userId) {
-  const { key, display } = detectServiceName(parsed.description);
-  const sub = getSubscription(userId, display);
+  const serviceName = extractSubscriptionName(parsed.description);
+  // Lookup fuzzy: encontra sub cujo nome aparece na descrição
+  const sub = findSubscriptionByDescription(userId, parsed.description)
+    || getSubscription(userId, serviceName);
 
   if (sub) {
     if (!sub.billing_day) {
       pendingSubBillingDay.set(ctx.from.id, {
-        subId: sub.id, transactionId, displayName: sub.name, myAmount: sub.my_amount, isSplit: false,
+        subId: sub.id, transactionId, displayName: sub.name,
+        myAmount: sub.my_amount, isSplit: false,
+        isVariable: sub.is_variable, defaultCategory: sub.default_category || 'Assinaturas',
       });
       await ctx.reply(
         `Ah, o *${sub.name}* de novo 😏\nMas ainda não sei quando é cobrado. Qual o dia do mês?`,
@@ -209,89 +205,62 @@ async function handleSubscriptionCheck(ctx, parsed, transactionId, userId) {
     return false;
   }
 
-  pendingSubSplit.set(transactionId, { key, display, totalAmount: parsed.amount, telegramUserId: ctx.from.id });
-  setTimeout(() => {
-    const p = pendingSubSplit.get(transactionId);
-    if (p) {
-      pendingSubSplit.delete(transactionId);
-      const user = getOrCreateUser(p.telegramUserId, '', null);
-      saveSubscription(user.id, p.display, p.totalAmount, 1, p.totalAmount, false);
-    }
-  }, 5 * 60 * 1000);
+  // Primeira vez — perguntar tipo de recorrência
+  pendingSubTypeSetup.set(transactionId, { serviceName, totalAmount: parsed.amount, telegramUserId: ctx.from.id });
+  setTimeout(() => pendingSubTypeSetup.delete(transactionId), 5 * 60 * 1000);
 
   await ctx.reply(
-    `📺 *${display}* — você divide com alguém?`,
+    `📺 *${serviceName}* — esse serviço é mensal?`,
     {
       parse_mode: 'Markdown',
       ...Markup.inlineKeyboard([
-        [
-          Markup.button.callback('👤 Só eu', `sub_solo_${transactionId}`),
-          Markup.button.callback('👥 Dividido', `sub_split_${transactionId}`),
-        ],
+        [Markup.button.callback('📅 Fixo todo mês', `sub_type_fix_${transactionId}`)],
+        [Markup.button.callback('📊 Mensal mas varia', `sub_type_var_${transactionId}`)],
+        [Markup.button.callback('1️⃣ Foi só essa vez', `sub_type_one_${transactionId}`)],
       ]),
     }
   );
   return true;
 }
 
-async function handleSubscriptionSplit(ctx) {
+async function handleSubscriptionType(ctx) {
   try {
     await ctx.answerCbQuery();
-    const choice = ctx.match[1];
+    const type = ctx.match[1]; // fix, var, one
     const transactionId = Number(ctx.match[2]);
-    const pending = pendingSubSplit.get(transactionId);
+    const pending = pendingSubTypeSetup.get(transactionId);
     if (!pending) { await ctx.editMessageText('⏰ Opção expirada.'); return; }
 
-    const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
+    pendingSubTypeSetup.delete(transactionId);
 
-    if (choice === 'solo') {
-      pendingSubSplit.delete(transactionId);
-      pendingSubBillingDay.set(ctx.from.id, {
-        transactionId, displayName: pending.display,
-        totalAmount: pending.totalAmount, splitWith: 1,
-        myAmount: pending.totalAmount, isSplit: false, dbUserId: user.id,
-        isVariable: false, defaultCategory: 'Assinaturas',
-      });
+    if (type === 'one') {
       await ctx.editMessageText(
-        `👤 Só você! Qual dia do mês o *${pending.display}* é cobrado? _(ex: 15)_`,
+        `👍 Registrado como gasto avulso. Sem compromisso! 😌`,
         { parse_mode: 'Markdown' }
       );
-    } else {
-      pendingSubCount.set(ctx.from.id, { transactionId, ...pending, dbUserId: user.id });
-      await ctx.editMessageText('👥 Com quantas pessoas no total? _(incluindo você, ex: 3)_', { parse_mode: 'Markdown' });
+      await askPaymentMethod(ctx, transactionId, pending.totalAmount, 'Assinaturas', pending.serviceName);
+      return;
     }
+
+    const isVariable = type === 'var';
+    const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
+
+    pendingSubBillingDay.set(ctx.from.id, {
+      transactionId, displayName: pending.serviceName,
+      totalAmount: pending.totalAmount, splitWith: 1,
+      myAmount: pending.totalAmount, isSplit: false,
+      dbUserId: user.id, isVariable, defaultCategory: 'Assinaturas',
+    });
+
+    await ctx.editMessageText(
+      isVariable
+        ? `📊 Mensal variável! Qual o dia de vencimento do *${pending.serviceName}*? _(ex: 10)_`
+        : `📅 Fixo todo mês! Qual o dia de cobrança do *${pending.serviceName}*? _(ex: 15)_`,
+      { parse_mode: 'Markdown' }
+    );
   } catch (error) {
     console.error('[FinBot ERROR] Erro no fluxo de assinatura:', error.message);
   }
-}
-
-async function handleSubscriptionCountInput(ctx, text) {
-  const userId = ctx.from.id;
-  const pending = pendingSubCount.get(userId);
-  const n = parseInt(text.trim(), 10);
-
-  if (isNaN(n) || n < 2 || n > 50) {
-    await ctx.reply('😬 Digite um número entre 2 e 50. Quantas pessoas dividem ao total?');
-    return;
-  }
-
-  pendingSubCount.delete(userId);
-  pendingSubSplit.delete(pending.transactionId);
-
-  const myAmount = Math.round((pending.totalAmount / n) * 100) / 100;
-  updateTransactionAmount(pending.transactionId, myAmount);
-
-  pendingSubBillingDay.set(userId, {
-    transactionId: pending.transactionId, displayName: pending.display,
-    totalAmount: pending.totalAmount, splitWith: n,
-    myAmount, isSplit: true, dbUserId: pending.dbUserId,
-    isVariable: false, defaultCategory: 'Assinaturas',
-  });
-
-  await ctx.reply(
-    `👥 Dividido por ${n}! E qual dia do mês o *${pending.display}* é cobrado? _(ex: 15)_`,
-    { parse_mode: 'Markdown' }
-  );
 }
 
 // ─── Contas variáveis (internet, luz, água, etc.) ─────────────────────────────
@@ -436,10 +405,10 @@ async function handleSubBillingDayInput(ctx, text) {
     );
   }
 
-  await ctx.reply(
-    `📅 Perfeito! Todo dia *${day}* vou registrar o *${pending.displayName}* automaticamente.\nComo se você fosse cancelar algum dia 😏`,
-    { parse_mode: 'Markdown' }
-  );
+  const confirmMsg = pending.isVariable
+    ? `📊 Todo dia *${day}* vou te lembrar do *${pending.displayName}*.\nPorque seu bolso precisa de aviso prévio 😒`
+    : `📅 Todo dia *${day}* vou registrar o *${pending.displayName}* automaticamente.\nComo se você fosse cancelar algum dia 😏`;
+  await ctx.reply(confirmMsg, { parse_mode: 'Markdown' });
 
   await askPaymentMethod(ctx, pending.transactionId, pending.myAmount, 'Assinaturas', pending.displayName);
 }
@@ -672,8 +641,7 @@ async function handleTextMessage(ctx) {
   const uid = ctx.from.id;
 
   if (pendingInstallCount.has(uid))      { await handleInstallmentCountInput(ctx, text); return; }
-  if (pendingSubCount.has(uid))           { await handleSubscriptionCountInput(ctx, text); return; }
-  if (pendingSubBillingDay.has(uid))      { await handleSubBillingDayInput(ctx, text); return; }
+  if (pendingSubBillingDay.has(uid))     { await handleSubBillingDayInput(ctx, text); return; }
   if (pendingVariableBillDay.has(uid))    { await handleVariableBillDayInput(ctx, text); return; }
   if (pendingCardNameInput.has(uid))      { await handleCardNameInput(ctx, text); return; }
   if (pendingCardDueDayInput.has(uid))    { await handleCardDueDayInput(ctx, text); return; }

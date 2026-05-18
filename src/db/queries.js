@@ -317,6 +317,19 @@ export function getSubscription(userId, name) {
   ).get(userId, name);
 }
 
+export function findSubscriptionByDescription(userId, description) {
+  if (!description) return null;
+  const db = getDatabase();
+  // Encontra assinatura cujo nome aparece na descrição (ex: "Spotify" em "Spotify de novo 🙄")
+  return db.prepare(
+    `SELECT * FROM subscriptions
+     WHERE user_id = ? AND is_active = 1
+       AND LOWER(?) LIKE '%' || LOWER(name) || '%'
+     ORDER BY LENGTH(name) DESC
+     LIMIT 1`
+  ).get(userId, description);
+}
+
 export function saveSubscription(userId, name, totalAmount, splitWith, myAmount, isSplit, billingDay = null, isVariable = false, defaultCategory = 'Assinaturas') {
   const db = getDatabase();
   db.prepare(
