@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   )),
   description TEXT,
   raw_message TEXT,
+  transaction_date DATE,
   payment_method TEXT DEFAULT 'outro',
   installments INTEGER DEFAULT 1,
   installment_number INTEGER DEFAULT 1,

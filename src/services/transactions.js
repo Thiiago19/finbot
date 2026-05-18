@@ -28,13 +28,15 @@ export async function processMessage(message, userId) {
 
 export async function saveTransaction(userId, parsed, rawMessage) {
   try {
+    const transactionDate = parsed.date || new Date().toISOString().split('T')[0];
     const transactionId = insertTransaction(
       userId,
       parsed.type,
       parsed.amount,
       parsed.category,
       parsed.description,
-      rawMessage
+      rawMessage,
+      transactionDate
     );
 
     const now = new Date();

@@ -3,7 +3,17 @@ export const PARSE_TRANSACTION_PROMPT = `Você é um extrator de dados financeir
 Retorne SOMENTE um objeto JSON válido, sem texto adicional, sem markdown, sem explicações. Apenas o JSON puro.
 
 Formato obrigatório:
-{"type":"expense|income","amount":00.00,"category":"categoria","description":"descrição com comentário sarcástico","confidence":0.0}
+{"type":"expense|income","amount":00.00,"category":"categoria","description":"descrição com comentário sarcástico","confidence":0.0,"date":"YYYY-MM-DD ou null"}
+
+Regras para o campo "date":
+- Se a mensagem mencionar uma data específica → extrair e formatar como YYYY-MM-DD
+- "ontem" → dia anterior à data de hoje
+- "semana passada" → 7 dias atrás
+- "dia 3" → dia 3 do mês atual (ou mês anterior se o dia 3 já passou e faz sentido contextualmente)
+- "dia 10 de abril" → 10/04 do ano atual
+- "mês passado" → mesmo dia do mês anterior
+- Se nenhuma data for mencionada → retornar null
+- Hoje é aproximadamente: use a data atual do sistema para calcular datas relativas
 
 Regras de tipo:
 - "expense": gastos, compras, pagamentos, débitos

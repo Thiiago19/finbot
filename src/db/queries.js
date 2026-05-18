@@ -26,14 +26,15 @@ export function getOrCreateUser(telegramId, firstName, username) {
 
 // ─── Transações ─────────────────────────────────────────────────────────────
 
-export function insertTransaction(userId, type, amount, category, description, rawMessage) {
+export function insertTransaction(userId, type, amount, category, description, rawMessage, transactionDate = null) {
   const db = getDatabase();
+  const date = transactionDate || new Date().toISOString().split('T')[0];
   const result = db
     .prepare(
-      `INSERT INTO transactions (user_id, type, amount, category, description, raw_message)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO transactions (user_id, type, amount, category, description, raw_message, transaction_date)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(userId, type, amount, category, description || null, rawMessage || null);
+    .run(userId, type, amount, category, description || null, rawMessage || null, date);
   return result.lastInsertRowid;
 }
 
@@ -43,9 +44,9 @@ export function getTransactionsByMonth(userId, year, month) {
     .prepare(
       `SELECT * FROM transactions
        WHERE user_id = ?
-         AND strftime('%Y', created_at) = ?
-         AND strftime('%m', created_at) = ?
-       ORDER BY created_at DESC`
+         AND strftime('%Y', transaction_date) = ?
+         AND strftime('%m', transaction_date) = ?
+       ORDER BY transaction_date DESC`
     )
     .all(userId, String(year), String(month).padStart(2, '0'));
 }
@@ -73,8 +74,8 @@ export function getMonthlySummary(userId, year, month) {
          SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as total_expenses
        FROM transactions
        WHERE user_id = ?
-         AND strftime('%Y', created_at) = ?
-         AND strftime('%m', created_at) = ?`
+         AND strftime('%Y', transaction_date) = ?
+         AND strftime('%m', transaction_date) = ?`
     )
     .get(userId, String(year), monthStr);
 
@@ -84,8 +85,8 @@ export function getMonthlySummary(userId, year, month) {
        FROM transactions
        WHERE user_id = ?
          AND type = 'expense'
-         AND strftime('%Y', created_at) = ?
-         AND strftime('%m', created_at) = ?
+         AND strftime('%Y', transaction_date) = ?
+         AND strftime('%m', transaction_date) = ?
        GROUP BY category
        ORDER BY total DESC`
     )
@@ -107,8 +108,8 @@ export function getCategoryMonthTotal(userId, category, year, month) {
        WHERE user_id = ?
          AND category = ?
          AND type = 'expense'
-         AND strftime('%Y', created_at) = ?
-         AND strftime('%m', created_at) = ?`
+         AND strftime('%Y', transaction_date) = ?
+         AND strftime('%m', transaction_date) = ?`
     )
     .get(userId, category, String(year), monthStr);
   return result?.total || 0;
@@ -216,7 +217,7 @@ export function createInstallmentTransactions(transactionId, totalInstallments, 
   const totalAmount = original.amount;
   const installmentAmount = Math.round((totalAmount / totalInstallments) * 100) / 100;
   const groupId = `${userId}_${Date.now()}`;
-  const baseDate = new Date(original.created_at);
+  const baseDate = new Date(original.transaction_date || original.created_at);
 
   db.prepare(
     `UPDATE transactions
@@ -227,11 +228,11 @@ export function createInstallmentTransactions(transactionId, totalInstallments, 
 
   for (let i = 2; i <= totalInstallments; i++) {
     const d = new Date(baseDate.getFullYear(), baseDate.getMonth() + (i - 1), baseDate.getDate());
-    const dateStr = d.toISOString().replace('T', ' ').substring(0, 19);
+    const dateStr = d.toISOString().split('T')[0];
     db.prepare(
       `INSERT INTO transactions
          (user_id, type, amount, category, description, raw_message,
-          payment_method, installments, installment_number, installment_group_id, total_amount, created_at)
+          payment_method, installments, installment_number, installment_group_id, total_amount, transaction_date)
        VALUES (?, ?, ?, ?, ?, '[parcelado]', 'credito', ?, ?, ?, ?, ?)`
     ).run(
       original.user_id, original.type, installmentAmount,
@@ -252,14 +253,14 @@ export function getCreditFatura(userId, year, month) {
     `SELECT COALESCE(SUM(amount), 0) as total FROM transactions
      WHERE user_id = ? AND type = 'expense' AND payment_method = 'credito'
        AND (installments IS NULL OR installments = 1)
-       AND strftime('%Y', created_at) = ? AND strftime('%m', created_at) = ?`
+       AND strftime('%Y', transaction_date) = ? AND strftime('%m', transaction_date) = ?`
   ).get(userId, y, m);
 
   const parcelas = db.prepare(
     `SELECT * FROM transactions
      WHERE user_id = ? AND type = 'expense' AND payment_method = 'credito'
        AND installments > 1
-       AND strftime('%Y', created_at) = ? AND strftime('%m', created_at) = ?
+       AND strftime('%Y', transaction_date) = ? AND strftime('%m', transaction_date) = ?
      ORDER BY installment_group_id, installment_number`
   ).all(userId, y, m);
 
@@ -280,7 +281,7 @@ export function getFutureInstallments(userId, months = 6) {
       `SELECT * FROM transactions
        WHERE user_id = ? AND type = 'expense' AND payment_method = 'credito'
          AND installments > 1
-         AND strftime('%Y', created_at) = ? AND strftime('%m', created_at) = ?
+         AND strftime('%Y', transaction_date) = ? AND strftime('%m', transaction_date) = ?
        ORDER BY installment_group_id, installment_number`
     ).all(userId, y, m);
 
@@ -302,7 +303,7 @@ export function getPaymentMethodBreakdown(userId, year, month) {
     `SELECT payment_method, SUM(amount) as total, COUNT(*) as count
      FROM transactions
      WHERE user_id = ? AND type = 'expense'
-       AND strftime('%Y', created_at) = ? AND strftime('%m', created_at) = ?
+       AND strftime('%Y', transaction_date) = ? AND strftime('%m', transaction_date) = ?
      GROUP BY payment_method
      ORDER BY total DESC`
   ).all(userId, String(year), String(month).padStart(2, '0'));
@@ -465,7 +466,7 @@ export function getFaturaByCard(userId, year, month) {
     `SELECT COALESCE(card_name, 'Sem cartão') as card_name, SUM(amount) as total
      FROM transactions
      WHERE user_id = ? AND type = 'expense' AND payment_method = 'credito'
-       AND strftime('%Y', created_at) = ? AND strftime('%m', created_at) = ?
+       AND strftime('%Y', transaction_date) = ? AND strftime('%m', transaction_date) = ?
      GROUP BY COALESCE(card_name, 'Sem cartão')
      ORDER BY total DESC`
   ).all(userId, y, m);
@@ -488,7 +489,7 @@ export function getCreditFaturaForCard(userId, cardName, year, month) {
     `SELECT COALESCE(SUM(amount), 0) as total FROM transactions
      WHERE user_id = ? AND type = 'expense' AND payment_method = 'credito'
        AND (card_name = ? OR (card_name IS NULL AND ? = 'Sem cartão'))
-       AND strftime('%Y', created_at) = ? AND strftime('%m', created_at) = ?`
+       AND strftime('%Y', transaction_date) = ? AND strftime('%m', transaction_date) = ?`
   ).get(userId, cardName, cardName, y, m);
   return result?.total || 0;
 }

@@ -48,6 +48,7 @@ function runMigrations(db) {
     `ALTER TABLE transactions ADD COLUMN installment_number INTEGER DEFAULT 1`,
     `ALTER TABLE transactions ADD COLUMN installment_group_id TEXT`,
     `ALTER TABLE transactions ADD COLUMN total_amount REAL`,
+    `ALTER TABLE transactions ADD COLUMN transaction_date DATE`,
     `ALTER TABLE transactions ADD COLUMN card_name TEXT`,
     `ALTER TABLE subscriptions ADD COLUMN is_variable INTEGER DEFAULT 0`,
     `ALTER TABLE subscriptions ADD COLUMN default_category TEXT DEFAULT 'Assinaturas'`,
@@ -89,6 +90,10 @@ function runMigrations(db) {
   for (const sql of newColumns) {
     try { db.exec(sql); } catch { /* coluna já existe */ }
   }
+  // Backfill: preencher transaction_date com a data de created_at nas linhas existentes
+  try {
+    db.exec(`UPDATE transactions SET transaction_date = DATE(created_at) WHERE transaction_date IS NULL`);
+  } catch { /* ignorar se falhar */ }
 }
 
 export function closeDatabase() {

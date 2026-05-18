@@ -148,9 +148,16 @@ async function saveAndReply(ctx, parsed, rawSource, userId) {
     categoryTotal: saveResult.categoryTotal,
   });
 
-  const responseMsg = sarcasticText
+  let responseMsg = sarcasticText
     ? formatSarcasticSave(sarcasticText, parsed, saveResult.categoryTotal)
     : `✅ *Registrado!*\n\n${formatCurrency(parsed.amount)} em ${parsed.category}`;
+
+  const today = new Date().toISOString().split('T')[0];
+  if (parsed.date && parsed.date !== today) {
+    const d = new Date(parsed.date + 'T12:00:00');
+    const dateLabel = d.toLocaleDateString('pt-BR', { day: 'numeric', month: 'long' });
+    responseMsg += `\n📅 _Data: ${dateLabel}_`;
+  }
 
   await ctx.reply(responseMsg, { parse_mode: 'Markdown' });
 
