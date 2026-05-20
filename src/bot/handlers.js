@@ -1,7 +1,7 @@
 import { Markup } from 'telegraf';
 import {
   getOrCreateUser, deleteAllTransactions, deleteAllCards, deleteAllSubscriptions,
-  updateTransactionPayment, createInstallmentTransactions, updateTransactionAmount, getTransactionById,
+  updateTransactionPayment, createInstallmentTransactions, updateTransactionAmount,
   getSubscription, findSubscriptionByDescription, saveSubscription,
   updateSubscriptionBillingDay, deactivateSubscription, getSubscriptionById,
   updateSubscriptionAmount, insertSubscriptionTransaction,
@@ -185,7 +185,7 @@ async function saveAndReply(ctx, parsed, rawSource, userId) {
       if (skipPayment) return;
     }
 
-    await askPaymentMethod(ctx, saveResult.transactionId, parsed.amount, parsed.category, parsed.description);
+    await askPaymentMethod(ctx, saveResult.transactionId, parsed.amount, parsed.category, parsed.description, saveResult.transactionDate);
   }
 }
 
@@ -427,10 +427,7 @@ async function handleSubBillingDayInput(ctx, text) {
 
 // ─── Método de pagamento ──────────────────────────────────────────────────────
 
-async function askPaymentMethod(ctx, transactionId, amount, category, description) {
-  // Lê a data da compra do banco para garantir que parcelas partam da data correta
-  const tx = getTransactionById(transactionId);
-  const transactionDate = tx?.transaction_date || null;
+async function askPaymentMethod(ctx, transactionId, amount, category, description, transactionDate = null) {
   pendingPaymentUpdate.set(transactionId, { amount, category, description, transactionDate, telegramUserId: ctx.from.id });
   setTimeout(() => pendingPaymentUpdate.delete(transactionId), 5 * 60 * 1000);
 
@@ -539,25 +536,24 @@ async function handleNewCard(ctx) {
 async function handleCardNameInput(ctx, text) {
   const userId = ctx.from.id;
   const pending = pendingCardNameInput.get(userId);
+  if (!pending) return; // estado expirou
 
-  // Verificar se o usuário já tem cartões cadastrados antes de criar um novo
+  // Consultar banco ANTES de aceitar o texto — evita cartões duplicados
   const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
   const cards = getAllCards(user.id);
 
   if (cards.length > 0 && !pending.forceNew) {
-    // Tem cartões — mostrar seleção em vez de criar duplicata
+    // Usuário já tem cartões: mostrar seleção inline em vez de criar novo
     pendingCardNameInput.delete(userId);
     const cardButtons = cards.map((c) => [
       Markup.button.callback(`💳 ${c.name}`, `card_sel_${c.id}_${pending.transactionId}`),
     ]);
     cardButtons.push([Markup.button.callback('➕ Novo cartão', `card_new_${pending.transactionId}`)]);
-    await ctx.reply(
-      '💳 Você já tem cartões cadastrados. Qual usar?',
-      Markup.inlineKeyboard(cardButtons)
-    );
+    await ctx.reply('💳 Você já tem cartões. Qual usar?', Markup.inlineKeyboard(cardButtons));
     return;
   }
 
+  // Sem cartões cadastrados (ou forceNew) — aceitar nome digitado
   const name = text.trim();
   if (!name || name.length < 2 || name.length > 30) {
     await ctx.reply('😬 Nome inválido. Digite entre 2 e 30 caracteres (ex: Nubank).');
@@ -898,7 +894,7 @@ async function handleConfirmCallback(ctx) {
         if (skipPayment) return;
       }
 
-      await askPaymentMethod(ctx, saveResult.transactionId, pending.parsed.amount, pending.parsed.category, pending.parsed.description);
+      await askPaymentMethod(ctx, saveResult.transactionId, pending.parsed.amount, pending.parsed.category, pending.parsed.description, saveResult.transactionDate);
     }
   } catch (error) {
     console.error('[FinBot ERROR] Erro ao confirmar transação:', error.message);

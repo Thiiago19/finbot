@@ -49,7 +49,7 @@ export async function saveTransaction(userId, parsed, rawMessage) {
       now.getMonth() + 1
     );
 
-    return { success: true, transactionId, categoryTotal };
+    return { success: true, transactionId, categoryTotal, transactionDate };
   } catch (error) {
     console.error('[FinBot ERROR] Falha ao salvar transação:', error.message);
     return { success: false, error: error.message };
