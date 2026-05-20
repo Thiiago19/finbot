@@ -209,6 +209,22 @@ export function updateTransactionPayment(transactionId, paymentMethod, installme
   ).run(paymentMethod, installments, installmentNumber, installmentGroupId, totalAmount, transactionId);
 }
 
+// Extrai ano/mês/dia de uma string de data sem conversão UTC,
+// evitando deslocamento de fuso (ex: "2025-03-01" → Mar, não Fev)
+function parseDateParts(dateStr) {
+  const clean = String(dateStr).split('T')[0].split(' ')[0]; // "YYYY-MM-DD"
+  const [year, month, day] = clean.split('-').map(Number);
+  return { year, month: month - 1, day }; // month 0-indexed para uso em new Date()
+}
+
+// Formata data local sem passar por toISOString() (que converte pra UTC)
+function formatLocalDate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 export function createInstallmentTransactions(transactionId, totalInstallments, userId) {
   const db = getDatabase();
   const original = db.prepare('SELECT * FROM transactions WHERE id = ?').get(transactionId);
@@ -217,7 +233,11 @@ export function createInstallmentTransactions(transactionId, totalInstallments, 
   const totalAmount = original.amount;
   const installmentAmount = Math.round((totalAmount / totalInstallments) * 100) / 100;
   const groupId = `${userId}_${Date.now()}`;
-  const baseDate = new Date(original.transaction_date || original.created_at);
+
+  // Usa transaction_date (data da compra) como base; fallback para created_at
+  const { year: baseYear, month: baseMonth, day: baseDay } = parseDateParts(
+    original.transaction_date || original.created_at
+  );
 
   db.prepare(
     `UPDATE transactions
@@ -227,8 +247,9 @@ export function createInstallmentTransactions(transactionId, totalInstallments, 
   ).run(installmentAmount, totalInstallments, groupId, totalAmount, transactionId);
 
   for (let i = 2; i <= totalInstallments; i++) {
-    const d = new Date(baseDate.getFullYear(), baseDate.getMonth() + (i - 1), baseDate.getDate());
-    const dateStr = d.toISOString().split('T')[0];
+    // Avança (i-1) meses a partir da data da compra
+    const d = new Date(baseYear, baseMonth + (i - 1), baseDay);
+    const dateStr = formatLocalDate(d);
     db.prepare(
       `INSERT INTO transactions
          (user_id, type, amount, category, description, raw_message,
