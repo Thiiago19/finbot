@@ -1,6 +1,6 @@
 import { Markup } from 'telegraf';
 import {
-  getOrCreateUser, deleteAllTransactions,
+  getOrCreateUser, deleteAllTransactions, deleteAllCards, deleteAllSubscriptions,
   updateTransactionPayment, createInstallmentTransactions, updateTransactionAmount, getTransactionById,
   getSubscription, findSubscriptionByDescription, saveSubscription,
   updateSubscriptionBillingDay, deactivateSubscription, getSubscriptionById,
@@ -131,6 +131,10 @@ export function registerHandlers(bot) {
 
   bot.action('limpar_confirmar', handleLimparConfirmar);
   bot.action('limpar_cancelar', handleLimparCancelar);
+
+  bot.action(/^mgr_(tx|cards|subs|all)$/, handleGerenciarOption);
+  bot.action(/^mgr_ok_(tx|cards|subs|all)$/, handleGerenciarConfirm);
+  bot.action('mgr_cancel', handleGerenciarCancel);
 }
 
 // ─── Helper central ───────────────────────────────────────────────────────────
@@ -963,6 +967,72 @@ async function handleSubCancelKeep(ctx) {
     );
   } catch (error) {
     console.error('[FinBot ERROR] Erro ao manter assinatura:', error.message);
+  }
+}
+
+// ─── /gerenciar ───────────────────────────────────────────────────────────────
+
+const MGR_LABELS = {
+  tx:    '🗑️ Limpar transações',
+  cards: '💳 Limpar cartões',
+  subs:  '📺 Limpar assinaturas',
+  all:   '☢️ Limpar tudo',
+};
+
+async function handleGerenciarOption(ctx) {
+  try {
+    await ctx.answerCbQuery();
+    const type = ctx.match[1];
+    await ctx.editMessageText(
+      `${MGR_LABELS[type]}\n\n_Tem certeza? Isso não tem volta...\nassim como seus gastos 😏_`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback('✅ Confirmar', `mgr_ok_${type}`),
+            Markup.button.callback('❌ Cancelar', 'mgr_cancel'),
+          ],
+        ]),
+      }
+    );
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro no menu /gerenciar:', error.message);
+  }
+}
+
+async function handleGerenciarConfirm(ctx) {
+  try {
+    await ctx.answerCbQuery();
+    const type = ctx.match[1];
+    const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
+
+    const msgs = {
+      tx:    'Pronto! Você está financeiramente virgem de novo 🫧',
+      cards: 'Cartões apagados! Agora finja que não tem nenhum 💳',
+      subs:  'Assinaturas removidas! Você vai cancelar de novo em 3... 2... 1... 📺',
+      all:   'Tabula rasa! Zeramos tudo. Novo você, mesmos gastos 😏',
+    };
+
+    if (type === 'tx' || type === 'all') deleteAllTransactions(user.id);
+    if (type === 'cards' || type === 'all') deleteAllCards(user.id);
+    if (type === 'subs' || type === 'all') deleteAllSubscriptions(user.id);
+
+    await ctx.editMessageText(`✅ *Feito!*\n\n_${msgs[type]}_`, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro ao executar limpeza:', error.message);
+    await ctx.reply('❌ Erro ao executar a limpeza. Tente novamente.');
+  }
+}
+
+async function handleGerenciarCancel(ctx) {
+  try {
+    await ctx.answerCbQuery('Cancelado.');
+    await ctx.editMessageText(
+      '❌ *Cancelado.*\n\n_Seus dados continuam lá, julgando você em silêncio. 😌_',
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro ao cancelar /gerenciar:', error.message);
   }
 }
 

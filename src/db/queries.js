@@ -188,8 +188,17 @@ export function updateGoalProgress(goalId, amount) {
 
 export function deleteAllTransactions(userId) {
   const db = getDatabase();
-  const result = db.prepare('DELETE FROM transactions WHERE user_id = ?').run(userId);
-  return result.changes;
+  return db.prepare('DELETE FROM transactions WHERE user_id = ?').run(userId).changes;
+}
+
+export function deleteAllCards(userId) {
+  const db = getDatabase();
+  return db.prepare('DELETE FROM cards WHERE user_id = ?').run(userId).changes;
+}
+
+export function deleteAllSubscriptions(userId) {
+  const db = getDatabase();
+  return db.prepare('DELETE FROM subscriptions WHERE user_id = ?').run(userId).changes;
 }
 
 // ─── Método de pagamento e parcelas ─────────────────────────────────────────

@@ -32,6 +32,7 @@ export function registerCommands(bot) {
   bot.command('assinaturas', handleAssinaturas);
   bot.command('cartoes', handleCartoes);
   bot.command('contas', handleContas);
+  bot.command('gerenciar', handleGerenciar);
   bot.help(handleAjuda);
 }
 
@@ -201,6 +202,7 @@ async function handleAjuda(ctx) {
       `💊 Saúde • 🎉 Lazer • 📺 Assinaturas\n` +
       `📚 Educação • 🛍️ Compras • 📈 Investimentos\n` +
       `💰 Receita • 📦 Outros\n\n` +
+      `• /gerenciar — limpar transações, cartões ou assinaturas\n\n` +
       `Dúvidas? Me manda uma mensagem! 😊`,
       { parse_mode: 'Markdown' }
     );
@@ -280,6 +282,25 @@ async function handleParcelas(ctx) {
   } catch (error) {
     console.error('[FinBot ERROR] Erro no /parcelas:', error.message);
     await ctx.reply('❌ Não consegui listar as parcelas agora. Tente novamente.');
+  }
+}
+
+async function handleGerenciar(ctx) {
+  try {
+    await ctx.reply(
+      `⚙️ *Gerenciar dados*\n\n_O que você quer destruir hoje?_`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('🗑️ Limpar transações', 'mgr_tx')],
+          [Markup.button.callback('💳 Limpar cartões', 'mgr_cards')],
+          [Markup.button.callback('📺 Limpar assinaturas', 'mgr_subs')],
+          [Markup.button.callback('☢️ Limpar tudo', 'mgr_all')],
+        ]),
+      }
+    );
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro no /gerenciar:', error.message);
   }
 }
 
