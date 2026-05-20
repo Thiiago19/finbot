@@ -153,7 +153,8 @@ async function saveAndReply(ctx, parsed, rawSource, userId) {
     : `✅ *Registrado!*\n\n${formatCurrency(parsed.amount)} em ${parsed.category}`;
 
   const today = new Date().toISOString().split('T')[0];
-  if (parsed.date && parsed.date !== today) {
+  const parsedDate = (parsed.date && parsed.date !== 'null') ? parsed.date : null;
+  if (parsedDate && parsedDate !== today) {
     const d = new Date(parsed.date + 'T12:00:00');
     const dateLabel = d.toLocaleDateString('pt-BR', { day: 'numeric', month: 'long' });
     responseMsg += `\n📅 _Data: ${dateLabel}_`;

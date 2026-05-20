@@ -28,7 +28,9 @@ export async function processMessage(message, userId) {
 
 export async function saveTransaction(userId, parsed, rawMessage) {
   try {
-    const transactionDate = parsed.date || new Date().toISOString().split('T')[0];
+    const transactionDate = (parsed.date && parsed.date !== 'null')
+      ? parsed.date
+      : new Date().toISOString().split('T')[0];
     const transactionId = insertTransaction(
       userId,
       parsed.type,
