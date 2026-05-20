@@ -1,7 +1,7 @@
 import { Markup } from 'telegraf';
 import {
   getOrCreateUser, deleteAllTransactions,
-  updateTransactionPayment, createInstallmentTransactions, updateTransactionAmount,
+  updateTransactionPayment, createInstallmentTransactions, updateTransactionAmount, getTransactionById,
   getSubscription, findSubscriptionByDescription, saveSubscription,
   updateSubscriptionBillingDay, deactivateSubscription, getSubscriptionById,
   updateSubscriptionAmount, insertSubscriptionTransaction,
@@ -424,7 +424,10 @@ async function handleSubBillingDayInput(ctx, text) {
 // ─── Método de pagamento ──────────────────────────────────────────────────────
 
 async function askPaymentMethod(ctx, transactionId, amount, category, description) {
-  pendingPaymentUpdate.set(transactionId, { amount, category, description, telegramUserId: ctx.from.id });
+  // Lê a data da compra do banco para garantir que parcelas partam da data correta
+  const tx = getTransactionById(transactionId);
+  const transactionDate = tx?.transaction_date || null;
+  pendingPaymentUpdate.set(transactionId, { amount, category, description, transactionDate, telegramUserId: ctx.from.id });
   setTimeout(() => pendingPaymentUpdate.delete(transactionId), 5 * 60 * 1000);
 
   await ctx.reply(
@@ -522,7 +525,7 @@ async function handleNewCard(ctx) {
   try {
     await ctx.answerCbQuery();
     const transactionId = Number(ctx.match[1]);
-    pendingCardNameInput.set(ctx.from.id, { transactionId });
+    pendingCardNameInput.set(ctx.from.id, { transactionId, forceNew: true });
     await ctx.editMessageText('💳 Qual o nome do novo cartão? _(ex: Nubank, Inter, XP)_', { parse_mode: 'Markdown' });
   } catch (error) {
     console.error('[FinBot ERROR] Erro ao iniciar cadastro de cartão:', error.message);
@@ -532,8 +535,26 @@ async function handleNewCard(ctx) {
 async function handleCardNameInput(ctx, text) {
   const userId = ctx.from.id;
   const pending = pendingCardNameInput.get(userId);
-  const name = text.trim();
 
+  // Verificar se o usuário já tem cartões cadastrados antes de criar um novo
+  const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
+  const cards = getAllCards(user.id);
+
+  if (cards.length > 0 && !pending.forceNew) {
+    // Tem cartões — mostrar seleção em vez de criar duplicata
+    pendingCardNameInput.delete(userId);
+    const cardButtons = cards.map((c) => [
+      Markup.button.callback(`💳 ${c.name}`, `card_sel_${c.id}_${pending.transactionId}`),
+    ]);
+    cardButtons.push([Markup.button.callback('➕ Novo cartão', `card_new_${pending.transactionId}`)]);
+    await ctx.reply(
+      '💳 Você já tem cartões cadastrados. Qual usar?',
+      Markup.inlineKeyboard(cardButtons)
+    );
+    return;
+  }
+
+  const name = text.trim();
   if (!name || name.length < 2 || name.length > 30) {
     await ctx.reply('😬 Nome inválido. Digite entre 2 e 30 caracteres (ex: Nubank).');
     return;
@@ -629,7 +650,7 @@ async function handleInstallmentCountInput(ctx, text) {
   pendingPaymentUpdate.delete(pending.transactionId);
 
   try {
-    const { installmentAmount } = createInstallmentTransactions(pending.transactionId, n, userId);
+    const { installmentAmount } = createInstallmentTransactions(pending.transactionId, n, userId, pending.transactionDate);
     await ctx.reply(
       `${n}x sem juros? _Mentira do universo._ 😏\n\nAnotei *${formatCurrency(installmentAmount)}/mês* pelos próximos *${n} meses*. 💳`,
       { parse_mode: 'Markdown' }

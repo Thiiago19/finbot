@@ -225,7 +225,7 @@ function formatLocalDate(d) {
   return `${y}-${m}-${day}`;
 }
 
-export function createInstallmentTransactions(transactionId, totalInstallments, userId) {
+export function createInstallmentTransactions(transactionId, totalInstallments, userId, transactionDate = null) {
   const db = getDatabase();
   const original = db.prepare('SELECT * FROM transactions WHERE id = ?').get(transactionId);
   if (!original) throw new Error('Transação não encontrada');
@@ -234,9 +234,9 @@ export function createInstallmentTransactions(transactionId, totalInstallments, 
   const installmentAmount = Math.round((totalAmount / totalInstallments) * 100) / 100;
   const groupId = `${userId}_${Date.now()}`;
 
-  // Usa transaction_date (data da compra) como base; fallback para created_at
+  // Prioridade: data passada explicitamente → transaction_date do banco → created_at
   const { year: baseYear, month: baseMonth, day: baseDay } = parseDateParts(
-    original.transaction_date || original.created_at
+    transactionDate || original.transaction_date || original.created_at
   );
 
   db.prepare(
