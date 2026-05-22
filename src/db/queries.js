@@ -244,9 +244,17 @@ export function createInstallmentTransactions(transactionId, totalInstallments, 
   const groupId = `${userId}_${Date.now()}`;
 
   // Prioridade: data passada explicitamente → transaction_date do banco → created_at
-  const { year: baseYear, month: baseMonth, day: baseDay } = parseDateParts(
-    transactionDate || original.transaction_date || original.created_at
-  );
+  const effectiveDate = transactionDate || original.transaction_date || original.created_at;
+  const { year: baseYear, month: baseMonth, day: baseDay } = parseDateParts(effectiveDate);
+
+  console.log('[FinBot] Criando parcelas:', {
+    totalAmount,
+    installments: totalInstallments,
+    transactionDate,
+    originalTxDate: original.transaction_date,
+    effectiveDate,
+    baseDate: { year: baseYear, month: baseMonth + 1, day: baseDay },
+  });
 
   db.prepare(
     `UPDATE transactions
@@ -255,10 +263,22 @@ export function createInstallmentTransactions(transactionId, totalInstallments, 
      WHERE id = ?`
   ).run(installmentAmount, totalInstallments, groupId, totalAmount, transactionId);
 
+  console.log('[FinBot] Parcela 1 (UPDATE original):', {
+    numero: 1,
+    data: effectiveDate,
+    valor: installmentAmount,
+  });
+
   for (let i = 2; i <= totalInstallments; i++) {
     // Avança (i-1) meses a partir da data da compra
     const d = new Date(baseYear, baseMonth + (i - 1), baseDay);
     const dateStr = formatLocalDate(d);
+
+    console.log('[FinBot] Salvando parcela:', {
+      numero: i,
+      data: dateStr,
+      valor: installmentAmount,
+    });
     db.prepare(
       `INSERT INTO transactions
          (user_id, type, amount, category, description, raw_message,

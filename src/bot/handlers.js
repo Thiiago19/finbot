@@ -651,8 +651,22 @@ async function handleInstallmentCountInput(ctx, text) {
 
   try {
     const { installmentAmount } = createInstallmentTransactions(pending.transactionId, n, userId, pending.transactionDate);
+
+    // Calcula range de meses a partir da data da compra
+    const MONTHS_PT = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+    const baseStr = (pending.transactionDate || new Date().toISOString().split('T')[0])
+      .split('T')[0].split(' ')[0];
+    const [by, bm] = baseStr.split('-').map(Number);
+    const startIdx = bm - 1;
+    const endDate = new Date(by, startIdx + (n - 1), 1);
+    const startLabel = MONTHS_PT[startIdx];
+    const endLabel = MONTHS_PT[endDate.getMonth()];
+    const rangeText = endDate.getFullYear() !== by
+      ? `de ${startLabel} de ${by} a ${endLabel} de ${endDate.getFullYear()}`
+      : `de ${startLabel} a ${endLabel}`;
+
     await ctx.reply(
-      `${n}x sem juros? _Mentira do universo._ 😏\n\nAnotei *${formatCurrency(installmentAmount)}/mês* pelos próximos *${n} meses*. 💳`,
+      `${n}x sem juros? _Mentira do universo._ 😏\n\nAnotei *${formatCurrency(installmentAmount)}/mês* *${rangeText}*. 💳`,
       { parse_mode: 'Markdown' }
     );
   } catch (error) {
