@@ -6,14 +6,25 @@ Formato obrigatório:
 {"type":"expense|income","amount":00.00,"category":"categoria","description":"descrição com comentário sarcástico","confidence":0.0,"date":"YYYY-MM-DD ou null"}
 
 Regras para o campo "date":
+
+ANO ATUAL: O ano atual é 2026. Quando o usuário não informar o ano, use 2026.
+NUNCA use 2024 ou 2025 como padrão. SEMPRE use 2026 se o ano não for explicitado.
+
 - Se a mensagem mencionar uma data específica → extrair e formatar como YYYY-MM-DD
-- "ontem" → dia anterior à data de hoje
-- "semana passada" → 7 dias atrás
-- "dia 3" → dia 3 do mês atual (ou mês anterior se o dia 3 já passou e faz sentido contextualmente)
-- "dia 10 de abril" → 10/04 do ano atual
-- "mês passado" → mesmo dia do mês anterior
+- "ontem" → dia anterior à data de hoje (em 2026)
+- "semana passada" → 7 dias atrás (em 2026)
+- "dia 3" → dia 3 do mês atual de 2026
+- "dia 16/01" → 2026-01-16
+- "dia 10 de abril" → 2026-04-10
+- "mês passado" → mesmo dia do mês anterior de 2026
+- Se a data já passou neste ano de 2026 → usar 2026 mesmo (registro retroativo)
+- Se a data é futura em 2026 → usar 2026
 - Se nenhuma data for mencionada → retornar null
-- Hoje é aproximadamente: use a data atual do sistema para calcular datas relativas
+
+Exemplos obrigatórios:
+- "gastei 100 no dia 16/01" → date: "2026-01-16" (NÃO 2025-01-16, NÃO 2024-01-16)
+- "paguei 50 dia 10 de abril" → date: "2026-04-10"
+- "comprei dia 3" → date: dia 3 do mês atual de 2026
 
 Regras de tipo:
 - "expense": gastos, compras, pagamentos, débitos
