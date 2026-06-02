@@ -9,6 +9,7 @@ const CATEGORY_EMOJIS = {
   Investimentos: '📈',
   Receita: '💰',
   Educação: '📚',
+  Negócio: '🏪',
   Outros: '📦',
 };
 
@@ -108,7 +109,7 @@ export function formatFutureInstallments(monthsData) {
   return msg.trim();
 }
 
-export function formatMonthlySummary(data, previousData, insightText, paymentBreakdown, creditInstallmentsTotal) {
+export function formatMonthlySummary(data, previousData, insightText, paymentBreakdown, creditInstallmentsTotal, businessExpenses = 0) {
   const { total_income, total_expenses, by_category } = data;
   const balance = total_income - total_expenses;
   const balanceEmoji = balance >= 0 ? '🟢' : '🔴';
@@ -122,10 +123,30 @@ export function formatMonthlySummary(data, previousData, insightText, paymentBre
       ? `_Ou você não registrou nada, ou fez um milagre. 🙄_`
       : `_Sobrou um troco. Guarda antes de inventar algo pra comprar. 😏_`;
 
+  const personalExpenses = total_expenses - businessExpenses;
+  const personalBalance = total_income - personalExpenses;
+  const generalBalance = total_income - total_expenses;
+
   let msg = `📊 *Resumo de ${monthName}*\n${balanceComment}\n\n`;
-  msg += `🟢 Receitas: *${formatCurrency(total_income)}*\n`;
-  msg += `🔴 Gastos: *${formatCurrency(total_expenses)}*\n`;
-  msg += `${balanceEmoji} Saldo: *${formatCurrency(balance)}*\n`;
+
+  if (businessExpenses > 0) {
+    // Modo com split pessoal/negócio
+    const personalEmoji = personalBalance >= 0 ? '🟢' : '🔴';
+    const generalEmoji = generalBalance >= 0 ? '🟢' : '🔴';
+    msg += `👤 *Pessoal:*\n`;
+    msg += `🟢 Receitas: *${formatCurrency(total_income)}*\n`;
+    msg += `🔴 Gastos: *${formatCurrency(personalExpenses)}*\n`;
+    msg += `${personalEmoji} Saldo: *${formatCurrency(personalBalance)}*\n\n`;
+    msg += `🏪 *Negócio:*\n`;
+    msg += `🔴 Gastos: *${formatCurrency(businessExpenses)}*\n`;
+    msg += `━━━━━━━━━━━━━━\n`;
+    msg += `${generalEmoji} *Saldo geral:* *${formatCurrency(generalBalance)}*\n`;
+  } else {
+    // Modo simples (sem gastos de negócio)
+    msg += `🟢 Receitas: *${formatCurrency(total_income)}*\n`;
+    msg += `🔴 Gastos: *${formatCurrency(total_expenses)}*\n`;
+    msg += `${balanceEmoji} Saldo: *${formatCurrency(balance)}*\n`;
+  }
 
   if (previousData) {
     const prevExpenses = previousData.total_expenses;
@@ -277,6 +298,43 @@ export function formatCards(cards) {
     msg += `💳 *${c.name}* — vencimento dia ${c.due_day}\n`;
   }
   return msg.trim();
+}
+
+export function formatNegocio({ currentTotal, previousTotal, transactions, monthName }) {
+  let msg = `🏪 *Resumo do Negócio — ${monthName}*\n`;
+
+  if (currentTotal === 0 && transactions.length === 0) {
+    msg += `\n_Nenhum gasto de negócio este mês. Tá pegando fácil ou tá quebrado? 🤡_`;
+    return msg;
+  }
+
+  const comment = currentTotal > 5000
+    ? '_Loja pegando fogo — o caixa também 🔥_'
+    : currentTotal > 0
+      ? '_Investindo no sonho. Ou no buraco. Veremos. 😏_'
+      : '_Mês zerado. Suspeito. 🤔_';
+
+  msg += `${comment}\n\n`;
+  msg += `💸 Total gasto: *${formatCurrency(currentTotal)}*\n`;
+
+  if (previousTotal > 0) {
+    const variation = ((currentTotal - previousTotal) / previousTotal) * 100;
+    const sign = variation > 0 ? '+' : '';
+    const emoji = variation > 0 ? '📈' : '📉';
+    msg += `${emoji} vs. mês anterior: *${sign}${variation.toFixed(1)}%*\n`;
+  } else if (currentTotal > 0) {
+    msg += `_(Sem comparativo — primeiro mês com gastos de negócio)_\n`;
+  }
+
+  if (transactions.length > 0) {
+    msg += `\n📋 *Últimas ${Math.min(transactions.length, 10)} transações:*\n`;
+    for (const t of transactions.slice(0, 10)) {
+      const date = new Date((t.transaction_date || t.created_at) + 'T12:00:00').toLocaleDateString('pt-BR');
+      msg += `💸 ${date} — *${formatCurrency(t.amount)}*${t.description ? ` _(${t.description})_` : ''}\n`;
+    }
+  }
+
+  return msg;
 }
 
 export function formatInsight(text) {

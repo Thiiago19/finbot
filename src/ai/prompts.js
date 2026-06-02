@@ -46,6 +46,17 @@ ASSINATURAS (serviços recorrentes pagos mensalmente):
 - Farmácia, médico, dentista, plano de saúde, convênio médico, Unimed, Amil, SulAmérica, Bradesco Saúde, hospital, remédio, academia, SmartFit, Bodytech → "Saúde"
 - Cinema, bar, restaurante presencial, viagem, hotel, show, teatro → "Lazer"
 - Seguro (carro, vida, residencial) → "Outros"
+
+NEGÓCIO (gastos da loja/empresa, distinto de gastos pessoais):
+- Estoque, mercadoria, fornecedor, atacado, revenda → "Negócio"
+- Matéria prima, insumo, embalagem, rótulo, etiqueta → "Negócio"
+- Equipamento para loja, máquina para negócio, ferramenta profissional → "Negócio"
+- Frete de compra, frete de mercadoria, nota fiscal de compra → "Negócio"
+- Aluguel comercial, contador, taxa comercial, taxa de cartão, maquininha → "Negócio"
+- Marketing, anúncio, publicidade, tráfego pago, Google Ads, Meta Ads → "Negócio"
+- Sistema, software para negócio, ERP, gestão de loja → "Negócio"
+- Palavras-chave: "para loja", "para empresa", "para o negócio", "compra do estoque", "fornecedor" → "Negócio"
+- Se houver ambiguidade entre Compras (pessoal) e Negócio, prefira Negócio quando o contexto comercial for explícito
 - Curso, faculdade, livro técnico, escola → "Educação"
 - Supermercado, mercado, feira → "Alimentação"
 - Roupa, eletrônico, compra online (sem ser assinatura) → "Compras"

@@ -2,6 +2,7 @@ import {
   getOrCreateUser, getMonthlySummary, getPreviousMonthSummary, getActiveGoals,
   getCreditFatura, getFutureInstallments, getPaymentMethodBreakdown,
   getAllActiveSubscriptions, getAllCards, getFaturaByCard,
+  getBusinessMonthlyTotal, getLastBusinessTransactions,
 } from '../db/queries.js';
 import { Markup } from 'telegraf';
 import { getMonthlyInsights } from '../services/insights.js';
@@ -16,6 +17,7 @@ import {
   formatSubscriptions,
   formatCards,
   formatContas,
+  formatNegocio,
 } from './formatter.js';
 
 export function registerCommands(bot) {
@@ -32,6 +34,7 @@ export function registerCommands(bot) {
   bot.command('assinaturas', handleAssinaturas);
   bot.command('cartoes', handleCartoes);
   bot.command('contas', handleContas);
+  bot.command('negocio', handleNegocio);
   bot.command('gerenciar', handleGerenciar);
   bot.help(handleAjuda);
 }
@@ -85,13 +88,14 @@ async function handleResumo(ctx) {
     const previousSummary = getPreviousMonthSummary(user.id);
     const paymentBreakdown = getPaymentMethodBreakdown(user.id, year, month);
     const fatura = getCreditFatura(user.id, year, month);
+    const businessExpenses = getBusinessMonthlyTotal(user.id, year, month);
 
     await ctx.reply('⏳ Gerando seu resumo com insights da IA...', { parse_mode: 'Markdown' });
 
     const insightText = await getMonthlyInsights(user);
     const message = formatMonthlySummary(
       summary, previousSummary, insightText,
-      paymentBreakdown, fatura.totalParcelas
+      paymentBreakdown, fatura.totalParcelas, businessExpenses
     );
 
     await ctx.reply(message, { parse_mode: 'Markdown' });
@@ -194,6 +198,7 @@ async function handleAjuda(ctx) {
       `• /gastos — últimas 10 transações\n` +
       `• /fatura — fatura do crédito do mês\n` +
       `• /parcelas — parcelas dos próximos 6 meses\n` +
+      `• /negocio — resumo dos gastos da loja/empresa\n` +
       `• /metas — metas financeiras ativas\n` +
       `• /ajuda — esta mensagem\n\n` +
       `━━━━━━━━━━━━━━━━━━━\n` +
@@ -201,7 +206,7 @@ async function handleAjuda(ctx) {
       `🍽️ Alimentação • 🚗 Transporte • 🏠 Moradia\n` +
       `💊 Saúde • 🎉 Lazer • 📺 Assinaturas\n` +
       `📚 Educação • 🛍️ Compras • 📈 Investimentos\n` +
-      `💰 Receita • 📦 Outros\n\n` +
+      `💰 Receita • 🏪 Negócio • 📦 Outros\n\n` +
       `• /gerenciar — limpar transações, cartões ou assinaturas\n\n` +
       `Dúvidas? Me manda uma mensagem! 😊`,
       { parse_mode: 'Markdown' }
@@ -282,6 +287,29 @@ async function handleParcelas(ctx) {
   } catch (error) {
     console.error('[FinBot ERROR] Erro no /parcelas:', error.message);
     await ctx.reply('❌ Não consegui listar as parcelas agora. Tente novamente.');
+  }
+}
+
+async function handleNegocio(ctx) {
+  try {
+    const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth() + 1;
+    const prev = new Date(year, month - 2, 1);
+
+    const currentTotal = getBusinessMonthlyTotal(user.id, year, month);
+    const previousTotal = getBusinessMonthlyTotal(user.id, prev.getFullYear(), prev.getMonth() + 1);
+    const transactions = getLastBusinessTransactions(user.id, 10);
+    const monthName = now.toLocaleString('pt-BR', { month: 'long', year: 'numeric' });
+
+    await ctx.reply(
+      formatNegocio({ currentTotal, previousTotal, transactions, monthName }),
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro no /negocio:', error.message);
+    await ctx.reply('❌ Não consegui buscar o resumo do negócio agora. Tente novamente.');
   }
 }
 

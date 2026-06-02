@@ -99,6 +99,22 @@ export function getMonthlySummary(userId, year, month) {
   };
 }
 
+// ─── Pessoal vs Negócio ──────────────────────────────────────────────────────
+
+export function getBusinessMonthlyTotal(userId, year, month) {
+  return getCategoryMonthTotal(userId, 'Negócio', year, month);
+}
+
+export function getLastBusinessTransactions(userId, limit = 10) {
+  const db = getDatabase();
+  return db.prepare(
+    `SELECT * FROM transactions
+     WHERE user_id = ? AND category = 'Negócio'
+     ORDER BY COALESCE(transaction_date, DATE(created_at)) DESC, id DESC
+     LIMIT ?`
+  ).all(userId, limit);
+}
+
 export function getCategoryMonthTotal(userId, category, year, month) {
   const db = getDatabase();
   const monthStr = String(month).padStart(2, '0');

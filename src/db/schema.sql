@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   amount REAL NOT NULL CHECK(amount > 0),
   category TEXT NOT NULL CHECK(category IN (
     'Alimentação', 'Transporte', 'Moradia', 'Saúde', 'Lazer',
-    'Assinaturas', 'Educação', 'Compras', 'Investimentos', 'Receita', 'Outros'
+    'Assinaturas', 'Educação', 'Compras', 'Investimentos', 'Receita', 'Negócio', 'Outros'
   )),
   description TEXT,
   raw_message TEXT,

@@ -94,6 +94,57 @@ function runMigrations(db) {
   try {
     db.exec(`UPDATE transactions SET transaction_date = DATE(created_at) WHERE transaction_date IS NULL`);
   } catch { /* ignorar se falhar */ }
+
+  // Migration: incluir 'Negócio' no CHECK constraint da coluna category
+  migrateAddNegocioCategory(db);
+}
+
+function migrateAddNegocioCategory(db) {
+  // Verifica se 'Negócio' já está no CHECK lendo o DDL da tabela
+  const tableInfo = db.prepare(
+    "SELECT sql FROM sqlite_master WHERE type='table' AND name='transactions'"
+  ).get();
+  if (!tableInfo || tableInfo.sql.includes("'Negócio'")) return; // já migrou
+
+  const cols = db.prepare("PRAGMA table_info(transactions)").all();
+  const colList = cols.map((c) => c.name).join(', ');
+
+  db.exec('BEGIN');
+  try {
+    db.exec(`
+      CREATE TABLE transactions_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        type TEXT NOT NULL CHECK(type IN ('expense', 'income')),
+        amount REAL NOT NULL CHECK(amount > 0),
+        category TEXT NOT NULL CHECK(category IN (
+          'Alimentação', 'Transporte', 'Moradia', 'Saúde', 'Lazer',
+          'Assinaturas', 'Educação', 'Compras', 'Investimentos', 'Receita', 'Negócio', 'Outros'
+        )),
+        description TEXT,
+        raw_message TEXT,
+        transaction_date DATE,
+        payment_method TEXT DEFAULT 'outro',
+        installments INTEGER DEFAULT 1,
+        installment_number INTEGER DEFAULT 1,
+        installment_group_id TEXT,
+        total_amount REAL,
+        card_name TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      )
+    `);
+    db.exec(`INSERT INTO transactions_new (${colList}) SELECT ${colList} FROM transactions`);
+    db.exec('DROP TABLE transactions');
+    db.exec('ALTER TABLE transactions_new RENAME TO transactions');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at)');
+    db.exec('COMMIT');
+    console.log('[FinBot] Migration: categoria Negócio adicionada à tabela transactions.');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
 }
 
 export function closeDatabase() {

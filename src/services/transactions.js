@@ -7,7 +7,7 @@ import {
 
 const VALID_CATEGORIES = [
   'Alimentação', 'Transporte', 'Moradia', 'Saúde', 'Lazer',
-  'Assinaturas', 'Educação', 'Compras', 'Investimentos', 'Receita', 'Outros',
+  'Assinaturas', 'Educação', 'Compras', 'Investimentos', 'Receita', 'Negócio', 'Outros',
 ];
 
 export async function processMessage(message, userId) {
