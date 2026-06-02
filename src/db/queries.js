@@ -105,6 +105,29 @@ export function getBusinessMonthlyTotal(userId, year, month) {
   return getCategoryMonthTotal(userId, 'Negócio', year, month);
 }
 
+export function getTransactionsForExport(userId, { period, month, year, scope }) {
+  const db = getDatabase();
+  const where = ['user_id = ?'];
+  const params = [userId];
+
+  if (period === 'month') {
+    where.push(`strftime('%Y', COALESCE(transaction_date, DATE(created_at))) = ?`);
+    where.push(`strftime('%m', COALESCE(transaction_date, DATE(created_at))) = ?`);
+    params.push(String(year), String(month).padStart(2, '0'));
+  } else if (period === 'year') {
+    where.push(`strftime('%Y', COALESCE(transaction_date, DATE(created_at))) = ?`);
+    params.push(String(year));
+  }
+  // 'all' não adiciona filtro de data
+
+  if (scope === 'business') where.push(`category = 'Negócio'`);
+  else if (scope === 'personal') where.push(`category != 'Negócio'`);
+
+  const sql = `SELECT * FROM transactions WHERE ${where.join(' AND ')}
+               ORDER BY COALESCE(transaction_date, DATE(created_at)) ASC, id ASC`;
+  return db.prepare(sql).all(...params);
+}
+
 export function getLastBusinessTransactions(userId, limit = 10) {
   const db = getDatabase();
   return db.prepare(

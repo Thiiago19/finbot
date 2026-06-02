@@ -3,7 +3,12 @@ import {
   getCreditFatura, getFutureInstallments, getPaymentMethodBreakdown,
   getAllActiveSubscriptions, getAllCards, getFaturaByCard,
   getBusinessMonthlyTotal, getLastBusinessTransactions,
+  getTransactionsForExport,
 } from '../db/queries.js';
+import { generateExportXlsx, buildExportLabel } from '../services/exporter.js';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { unlinkSync } from 'fs';
 import { Markup } from 'telegraf';
 import { getMonthlyInsights } from '../services/insights.js';
 import { getRecentTransactions } from '../services/transactions.js';
@@ -35,6 +40,7 @@ export function registerCommands(bot) {
   bot.command('cartoes', handleCartoes);
   bot.command('contas', handleContas);
   bot.command('negocio', handleNegocio);
+  bot.command('exportar', handleExportar);
   bot.command('gerenciar', handleGerenciar);
   bot.help(handleAjuda);
 }
@@ -199,6 +205,7 @@ async function handleAjuda(ctx) {
       `• /fatura — fatura do crédito do mês\n` +
       `• /parcelas — parcelas dos próximos 6 meses\n` +
       `• /negocio — resumo dos gastos da loja/empresa\n` +
+      `• /exportar — planilha .xlsx (aceita: maio, 2026, tudo, negocio, pessoal)\n` +
       `• /metas — metas financeiras ativas\n` +
       `• /ajuda — esta mensagem\n\n` +
       `━━━━━━━━━━━━━━━━━━━\n` +
@@ -310,6 +317,76 @@ async function handleNegocio(ctx) {
   } catch (error) {
     console.error('[FinBot ERROR] Erro no /negocio:', error.message);
     await ctx.reply('❌ Não consegui buscar o resumo do negócio agora. Tente novamente.');
+  }
+}
+
+const EXPORT_MONTHS = {
+  janeiro: 1, fevereiro: 2, 'março': 3, marco: 3, abril: 4,
+  maio: 5, junho: 6, julho: 7, agosto: 8,
+  setembro: 9, outubro: 10, novembro: 11, dezembro: 12,
+};
+
+function parseExportArgs(text) {
+  const args = text.trim().split(/\s+/).slice(1); // remove '/exportar'
+  const now = new Date();
+  const result = {
+    scope: 'all',
+    period: 'month',
+    month: now.getMonth() + 1,
+    year: now.getFullYear(),
+  };
+  let monthExplicit = false;
+  let allExplicit = false;
+
+  for (const raw of args) {
+    const a = raw.toLowerCase().normalize('NFC');
+    if (a === 'negocio' || a === 'negócio') result.scope = 'business';
+    else if (a === 'pessoal') result.scope = 'personal';
+    else if (a === 'tudo' || a === 'todo' || a === 'todos') { result.period = 'all'; allExplicit = true; }
+    else if (EXPORT_MONTHS[a]) { result.month = EXPORT_MONTHS[a]; result.period = 'month'; monthExplicit = true; }
+    else if (/^\d{4}$/.test(a)) {
+      result.year = parseInt(a, 10);
+      // Ano sozinho vira period=year; mês+ano mantém period=month; tudo sempre vence
+      if (!monthExplicit && !allExplicit) result.period = 'year';
+    }
+  }
+  return result;
+}
+
+async function handleExportar(ctx) {
+  let tmpPath = null;
+  try {
+    const parsed = parseExportArgs(ctx.message.text);
+    await ctx.reply('⏳ Gerando sua planilha... preparando as provas do crime financeiro 🔍');
+
+    const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
+    const transactions = getTransactionsForExport(user.id, parsed);
+
+    if (transactions.length === 0) {
+      await ctx.reply(
+        '😏 Não há transações nesse período.\nOu você é muito econômico, ou esqueceu de registrar. _Chuto a segunda opção._',
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+
+    const label = buildExportLabel(parsed);
+    const filename = `${label}.xlsx`;
+    tmpPath = join(tmpdir(), `finbot_export_${user.id}_${Date.now()}.xlsx`);
+
+    await generateExportXlsx(transactions, parsed, tmpPath);
+
+    await ctx.replyWithDocument(
+      { source: tmpPath, filename },
+      { caption: '📊 Aqui está sua planilha de arrependimentos... digo, de controle financeiro! 😏' }
+    );
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro no /exportar:', error.message);
+    await ctx.reply('❌ Erro ao gerar a planilha. Tente novamente.');
+  } finally {
+    if (tmpPath) {
+      try { unlinkSync(tmpPath); } catch { /* arquivo já removido */ }
+    }
   }
 }
 
