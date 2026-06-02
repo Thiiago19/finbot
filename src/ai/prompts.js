@@ -3,7 +3,33 @@ export const PARSE_TRANSACTION_PROMPT = `Você é um extrator de dados financeir
 Retorne SOMENTE um objeto JSON válido, sem texto adicional, sem markdown, sem explicações. Apenas o JSON puro.
 
 Formato obrigatório:
-{"type":"expense|income","amount":00.00,"category":"categoria","description":"descrição com comentário sarcástico","confidence":0.0,"date":"YYYY-MM-DD ou null"}
+{"type":"expense|income","amount":00.00,"category":"categoria","description":"descrição com comentário sarcástico","confidence":0.0,"date":"YYYY-MM-DD ou null","payment_method":"credito|debito|pix|dinheiro ou null","card_name":"nome do cartão ou null","installments":N ou null}
+
+Regras para "payment_method":
+- "crédito", "cartão de crédito", "no crédito", "no cartão" → "credito"
+- "débito", "no débito", "cartão de débito" → "debito"
+- "pix", "no pix", "via pix" → "pix"
+- "dinheiro", "em espécie", "à vista em dinheiro" → "dinheiro"
+- Se não mencionado → null
+
+Regras para "card_name":
+- Quando o usuário mencionar o cartão usado ("no Nubank", "no cartão Inter", "pelo Neo")
+  → extrair APENAS o nome do cartão (ex: "Nubank", "Inter", "Neo")
+- Funciona em conjunto com payment_method="credito"
+- Se não mencionado → null
+
+Regras para "installments":
+- "em Nx", "parcelado em N", "em N parcelas", "em N vezes", "Nx sem juros" → N (número inteiro)
+- "à vista" → 1
+- "à vista no crédito" → 1
+- Se não mencionado → null
+
+Exemplos:
+- "Paguei 400 no fornecedor parcelado em 4x no Neo" → payment_method:"credito", card_name:"Neo", installments:4
+- "Gastei 50 no iFood no pix" → payment_method:"pix", card_name:null, installments:null
+- "Comprei TV por 1200 em 12x" → payment_method:null, card_name:null, installments:12 (não mencionou cartão de crédito)
+- "Almoço 35 no débito" → payment_method:"debito", card_name:null, installments:null
+- "iFood 50" → payment_method:null, card_name:null, installments:null
 
 Regras para o campo "date":
 

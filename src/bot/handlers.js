@@ -6,7 +6,7 @@ import {
   updateSubscriptionBillingDay, deactivateSubscription, getSubscriptionById,
   updateSubscriptionAmount, insertSubscriptionTransaction,
   insertPendingBill, getUnresolvedPendingBill, resolvePendingBill,
-  getAllCards, saveCard, updateTransactionCard,
+  getAllCards, findCardByName, saveCard, updateTransactionCard,
 } from '../db/queries.js';
 import { processMessage, saveTransaction } from '../services/transactions.js';
 import { runAlertsAfterExpense } from '../services/alerts.js';
@@ -185,7 +185,7 @@ async function saveAndReply(ctx, parsed, rawSource, userId) {
       if (skipPayment) return;
     }
 
-    await askPaymentMethod(ctx, saveResult.transactionId, parsed.amount, parsed.category, parsed.description, saveResult.transactionDate);
+    await processPaymentData(ctx, saveResult, parsed, userId);
   }
 }
 
@@ -425,6 +425,122 @@ async function handleSubBillingDayInput(ctx, text) {
   await askPaymentMethod(ctx, pending.transactionId, pending.myAmount, 'Assinaturas', pending.displayName);
 }
 
+// ─── Helpers: dados de pagamento pré-extraídos pela IA ───────────────────────
+
+const MONTHS_PT = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+
+function normalizePaymentMethod(m) {
+  if (!m || typeof m !== 'string') return null;
+  const lower = m.toLowerCase().trim();
+  return ['credito', 'debito', 'pix', 'dinheiro'].includes(lower) ? lower : null;
+}
+
+function normalizeInstallments(n) {
+  const v = parseInt(n, 10);
+  if (isNaN(v) || v < 1 || v > 120) return null;
+  return v;
+}
+
+function formatInstallmentRange(baseDateStr, n) {
+  const clean = (baseDateStr || new Date().toISOString().split('T')[0])
+    .split('T')[0].split(' ')[0];
+  const [by, bm] = clean.split('-').map(Number);
+  const startIdx = bm - 1;
+  const endDate = new Date(by, startIdx + (n - 1), 1);
+  return endDate.getFullYear() !== by
+    ? `de ${MONTHS_PT[startIdx]} de ${by} a ${MONTHS_PT[endDate.getMonth()]} de ${endDate.getFullYear()}`
+    : `de ${MONTHS_PT[startIdx]} a ${MONTHS_PT[endDate.getMonth()]}`;
+}
+
+// Aplica parcelas direto e responde com sarcasmo
+async function applyInstallmentsAndReply(ctx, txId, n, txDate, userId, cardName = null) {
+  const { installmentAmount } = createInstallmentTransactions(txId, n, userId, txDate);
+  const range = formatInstallmentRange(txDate, n);
+  const cardPrefix = cardName ? `💳 ${cardName} — ` : '';
+  await ctx.reply(
+    `${n}x sem juros? _Mentira do universo._ 😏\n\n${cardPrefix}*${formatCurrency(installmentAmount)}/mês* *${range}*. 💳`,
+    { parse_mode: 'Markdown' }
+  );
+}
+
+// Orquestra tudo que vem pré-extraído pela IA (payment_method, card_name, installments).
+// Retorna sem fazer nada se ainda restar pergunta — o fluxo continua via interação.
+async function processPaymentData(ctx, saveResult, parsed, userId) {
+  const txId = saveResult.transactionId;
+  const txDate = saveResult.transactionDate;
+  const method = normalizePaymentMethod(parsed.payment_method);
+  const installments = normalizeInstallments(parsed.installments);
+
+  // (1) Sem método informado → pergunta tudo via fluxo clássico
+  if (!method) {
+    await askPaymentMethod(ctx, txId, parsed.amount, parsed.category, parsed.description, txDate);
+    return;
+  }
+
+  // (2) Método não-crédito → salva direto, fim
+  if (method !== 'credito') {
+    updateTransactionPayment(txId, method, 1, 1, null, null);
+    const labels = { debito: '🏦 Débito anotado!', pix: '⚡ Pix anotado!', dinheiro: '💵 Dinheiro anotado!' };
+    await ctx.reply(`${labels[method]}\n_Pelo menos não vai gerar fatura. 😌_`, { parse_mode: 'Markdown' });
+    return;
+  }
+
+  // (3) Crédito — precisa de cartão + (à vista ou parcelas)
+  await processCreditFlow(ctx, txId, parsed, txDate, userId, installments);
+}
+
+async function processCreditFlow(ctx, txId, parsed, txDate, userId, installments) {
+  const cardName = parsed.card_name;
+  const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
+
+  // (3a) Cartão informado → buscar no banco
+  if (cardName && typeof cardName === 'string' && cardName.trim()) {
+    const card = findCardByName(user.id, cardName.trim());
+    if (card) {
+      // Cartão encontrado → aplicar parcelas ou à vista direto
+      updateTransactionCard(txId, card.name);
+      if (installments && installments >= 2) {
+        await applyInstallmentsAndReply(ctx, txId, installments, txDate, userId, card.name);
+      } else {
+        updateTransactionPayment(txId, 'credito', 1, 1, null, null);
+        await ctx.reply(`💳 *${card.name}* — à vista no crédito. _Anotado!_`, { parse_mode: 'Markdown' });
+      }
+      return;
+    }
+    // Cartão não cadastrado → pular pergunta de nome, pedir só o vencimento
+    pendingCardDueDayInput.set(ctx.from.id, {
+      transactionId: txId,
+      cardName: cardName.trim(),
+      autoRegister: true,
+      installmentsHint: installments,
+      transactionDate: txDate,
+    });
+    await ctx.reply(
+      `💳 Cartão *${cardName.trim()}* não está cadastrado. Qual o dia do vencimento? _(1 a 31)_`,
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  // (3b) Crédito sem cartão informado → ir direto à seleção (sem reperguntar método)
+  pendingPaymentUpdate.set(txId, {
+    amount: parsed.amount, category: parsed.category, description: parsed.description,
+    transactionDate: txDate, telegramUserId: ctx.from.id,
+    installmentsHint: installments,
+  });
+  setTimeout(() => pendingPaymentUpdate.delete(txId), 5 * 60 * 1000);
+
+  const cards = getAllCards(user.id);
+  if (cards.length === 0) {
+    pendingCardNameInput.set(ctx.from.id, { transactionId: txId });
+    await ctx.reply('💳 Crédito. Qual o nome do cartão? _(ex: Nubank, Inter, XP)_', { parse_mode: 'Markdown' });
+    return;
+  }
+  const cardButtons = cards.map((c) => [Markup.button.callback(`💳 ${c.name}`, `card_sel_${c.id}_${txId}`)]);
+  cardButtons.push([Markup.button.callback('➕ Novo cartão', `card_new_${txId}`)]);
+  await ctx.reply('💳 Qual cartão foi usado?', Markup.inlineKeyboard(cardButtons));
+}
+
 // ─── Método de pagamento ──────────────────────────────────────────────────────
 
 async function askPaymentMethod(ctx, transactionId, amount, category, description, transactionDate = null) {
@@ -502,6 +618,20 @@ async function handleCardSelection(ctx) {
       pendingPaymentUpdate.delete(transactionId);
       updateTransactionPayment(transactionId, 'credito', 1, 1, null, null);
       await ctx.editMessageText(`💳 *${card.name}* — assinatura no crédito anotada. 📺`, { parse_mode: 'Markdown' });
+      return;
+    }
+
+    // Atalho: parcelas pré-informadas pelo usuário na mensagem
+    if (pending.installmentsHint && pending.installmentsHint >= 2) {
+      pendingPaymentUpdate.delete(transactionId);
+      await ctx.editMessageText(`💳 *${card.name}* selecionado!`, { parse_mode: 'Markdown' });
+      await applyInstallmentsAndReply(ctx, transactionId, pending.installmentsHint, pending.transactionDate, user.id, card.name);
+      return;
+    }
+    if (pending.installmentsHint === 1) {
+      pendingPaymentUpdate.delete(transactionId);
+      updateTransactionPayment(transactionId, 'credito', 1, 1, null, null);
+      await ctx.editMessageText(`💳 *${card.name}* — à vista no crédito. Anotado!`, { parse_mode: 'Markdown' });
       return;
     }
 
@@ -586,11 +716,36 @@ async function handleCardDueDayInput(ctx, text) {
     { parse_mode: 'Markdown' }
   );
 
+  // Atalho: cartão foi auto-cadastrado a partir da mensagem (parsed.card_name)
+  if (pending.autoRegister) {
+    if (pending.installmentsHint && pending.installmentsHint >= 2) {
+      await applyInstallmentsAndReply(ctx, pending.transactionId, pending.installmentsHint, pending.transactionDate, user.id, pending.cardName);
+      return;
+    }
+    // Sem parcelas informadas → à vista (auto-registro implica que tudo já estava na mensagem)
+    updateTransactionPayment(pending.transactionId, 'credito', 1, 1, null, null);
+    await ctx.reply(`💳 *${pending.cardName}* — à vista no crédito. Anotado!`, { parse_mode: 'Markdown' });
+    return;
+  }
+
   const paymentPending = pendingPaymentUpdate.get(pending.transactionId);
   if (paymentPending?.category === 'Assinaturas') {
     pendingPaymentUpdate.delete(pending.transactionId);
     updateTransactionPayment(pending.transactionId, 'credito', 1, 1, null, null);
     await ctx.reply('📺 Assinatura no crédito — anotado!', { parse_mode: 'Markdown' });
+    return;
+  }
+
+  // Cartão novo cadastrado via fluxo manual — pode haver installmentsHint vindo de processCreditFlow
+  if (paymentPending?.installmentsHint && paymentPending.installmentsHint >= 2) {
+    pendingPaymentUpdate.delete(pending.transactionId);
+    await applyInstallmentsAndReply(ctx, pending.transactionId, paymentPending.installmentsHint, paymentPending.transactionDate, user.id, pending.cardName);
+    return;
+  }
+  if (paymentPending?.installmentsHint === 1) {
+    pendingPaymentUpdate.delete(pending.transactionId);
+    updateTransactionPayment(pending.transactionId, 'credito', 1, 1, null, null);
+    await ctx.reply(`💳 *${pending.cardName}* — à vista no crédito.`, { parse_mode: 'Markdown' });
     return;
   }
 
@@ -650,25 +805,7 @@ async function handleInstallmentCountInput(ctx, text) {
   pendingPaymentUpdate.delete(pending.transactionId);
 
   try {
-    const { installmentAmount } = createInstallmentTransactions(pending.transactionId, n, userId, pending.transactionDate);
-
-    // Calcula range de meses a partir da data da compra
-    const MONTHS_PT = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
-    const baseStr = (pending.transactionDate || new Date().toISOString().split('T')[0])
-      .split('T')[0].split(' ')[0];
-    const [by, bm] = baseStr.split('-').map(Number);
-    const startIdx = bm - 1;
-    const endDate = new Date(by, startIdx + (n - 1), 1);
-    const startLabel = MONTHS_PT[startIdx];
-    const endLabel = MONTHS_PT[endDate.getMonth()];
-    const rangeText = endDate.getFullYear() !== by
-      ? `de ${startLabel} de ${by} a ${endLabel} de ${endDate.getFullYear()}`
-      : `de ${startLabel} a ${endLabel}`;
-
-    await ctx.reply(
-      `${n}x sem juros? _Mentira do universo._ 😏\n\nAnotei *${formatCurrency(installmentAmount)}/mês* *${rangeText}*. 💳`,
-      { parse_mode: 'Markdown' }
-    );
+    await applyInstallmentsAndReply(ctx, pending.transactionId, n, pending.transactionDate, userId);
   } catch (error) {
     console.error('[FinBot ERROR] Erro ao criar parcelas:', error.message);
     await ctx.reply('❌ Erro ao criar as parcelas. Tente novamente.');
@@ -908,7 +1045,7 @@ async function handleConfirmCallback(ctx) {
         if (skipPayment) return;
       }
 
-      await askPaymentMethod(ctx, saveResult.transactionId, pending.parsed.amount, pending.parsed.category, pending.parsed.description, saveResult.transactionDate);
+      await processPaymentData(ctx, saveResult, pending.parsed, pending.userId);
     }
   } catch (error) {
     console.error('[FinBot ERROR] Erro ao confirmar transação:', error.message);

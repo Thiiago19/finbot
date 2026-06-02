@@ -511,6 +511,25 @@ export function getAllCards(userId) {
   return db.prepare('SELECT * FROM cards WHERE user_id = ? ORDER BY name').all(userId);
 }
 
+export function findCardByName(userId, name) {
+  if (!name || typeof name !== 'string') return null;
+  const db = getDatabase();
+  // 1. Match exato case-insensitive
+  let card = db.prepare(
+    `SELECT * FROM cards WHERE user_id = ? AND LOWER(name) = LOWER(?) LIMIT 1`
+  ).get(userId, name);
+  if (card) return card;
+  // 2. Match fuzzy: nome informado aparece no cadastrado OU vice-versa
+  //    Ex: "Neo" casa com "Bradesco Neo" e vice-versa
+  return db.prepare(
+    `SELECT * FROM cards WHERE user_id = ?
+       AND (LOWER(name) LIKE '%' || LOWER(?) || '%'
+         OR LOWER(?) LIKE '%' || LOWER(name) || '%')
+     ORDER BY LENGTH(name) DESC
+     LIMIT 1`
+  ).get(userId, name, name);
+}
+
 export function saveCard(userId, name, dueDay) {
   const db = getDatabase();
   const result = db.prepare(
