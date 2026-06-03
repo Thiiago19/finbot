@@ -8,7 +8,7 @@ import {
 import { generateExportXlsx, buildExportLabel } from '../services/exporter.js';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { unlinkSync } from 'fs';
+import { unlinkSync, existsSync, createReadStream } from 'fs';
 import { Markup } from 'telegraf';
 import { getMonthlyInsights } from '../services/insights.js';
 import { getRecentTransactions } from '../services/transactions.js';
@@ -376,8 +376,14 @@ async function handleExportar(ctx) {
 
     await generateExportXlsx(transactions, parsed, tmpPath);
 
+    // Garantir que o arquivo foi efetivamente escrito antes de enviar
+    if (!existsSync(tmpPath)) {
+      throw new Error('Arquivo não gerado');
+    }
+
+    // Enviar via stream evita "socket hang up" em arquivos maiores
     await ctx.replyWithDocument(
-      { source: tmpPath, filename },
+      { source: createReadStream(tmpPath), filename },
       { caption: '📊 Aqui está sua planilha de arrependimentos... digo, de controle financeiro! 😏' }
     );
   } catch (error) {
