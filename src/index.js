@@ -28,7 +28,9 @@ async function main() {
   validateEnv();
   initDatabase();
 
-  const bot = new Telegraf(process.env.TELEGRAM_TOKEN);
+  const bot = new Telegraf(process.env.TELEGRAM_TOKEN, {
+    telegram: { timeout: 30000 },
+  });
 
   registerCommands(bot);
   registerHandlers(bot);

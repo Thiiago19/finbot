@@ -8,7 +8,7 @@ import {
 import { generateExportXlsx, buildExportLabel } from '../services/exporter.js';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { unlinkSync, existsSync, createReadStream } from 'fs';
+import { readFileSync, unlinkSync, existsSync } from 'fs';
 import { Markup } from 'telegraf';
 import { getMonthlyInsights } from '../services/insights.js';
 import { getRecentTransactions } from '../services/transactions.js';
@@ -381,11 +381,16 @@ async function handleExportar(ctx) {
       throw new Error('Arquivo não gerado');
     }
 
-    // Enviar via stream evita "socket hang up" em arquivos maiores
+    // Carregar como Buffer em vez de stream — evita "socket hang up"
+    const fileBuffer = readFileSync(tmpPath);
+    console.log('[FinBot] Enviando arquivo:', tmpPath, fileBuffer.length, 'bytes');
+
     await ctx.replyWithDocument(
-      { source: createReadStream(tmpPath), filename },
+      { source: fileBuffer, filename },
       { caption: '📊 Aqui está sua planilha de arrependimentos... digo, de controle financeiro! 😏' }
     );
+
+    console.log('[FinBot] Arquivo enviado com sucesso:', filename);
   } catch (error) {
     console.error('[FinBot ERROR] Erro no /exportar:', error.message);
     await ctx.reply('❌ Erro ao gerar a planilha. Tente novamente.');
