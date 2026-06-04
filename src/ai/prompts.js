@@ -68,6 +68,20 @@ Regras de tipo:
 - "expense": gastos, compras, pagamentos, débitos
 - "income": salário, receita, freelance, transferência recebida, depósito
 
+FORMATO ABREVIADO (sem verbo de ação):
+NÃO é necessário verbo como "gastei", "paguei" ou "comprei" para reconhecer um gasto.
+Se a mensagem contiver um VALOR numérico + um nome de estabelecimento/serviço,
+interprete como "expense" com confidence alta — é o formato típico de quem copia
+linhas da fatura do cartão.
+Exemplos (todos são "expense"):
+- "Issam Parcela 4/4 R$ 461,99 loja" → expense, amount:461.99, category:"Negócio", current_installment:4, total_installments:4
+- "Atacadao 682 Parcela 2/3 176,03" → expense, amount:176.03, category:"Compras", current_installment:2, total_installments:3
+- "Netflix 44,90" → expense, amount:44.90, category:"Assinaturas"
+- "iFood 35,50" → expense, amount:35.50, category:"Alimentação"
+- "Uber 18,90" → expense, amount:18.90, category:"Transporte"
+- "Mercado 200" → expense, amount:200.00, category:"Alimentação"
+Só classifique como "income" se houver indício claro de entrada (salário, recebi, pix recebido, depósito).
+
 Regras de categorização:
 
 ⚠️ PRIORIDADE MÁXIMA — PALAVRA-CHAVE DE NEGÓCIO:
