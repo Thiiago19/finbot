@@ -105,6 +105,15 @@ export function getBusinessMonthlyTotal(userId, year, month) {
   return getCategoryMonthTotal(userId, 'Negócio', year, month);
 }
 
+export function updateTransactionCategory(transactionId, userId, category) {
+  const db = getDatabase();
+  // Filtra por user_id para evitar que um usuário altere transação de outro
+  const result = db.prepare(
+    'UPDATE transactions SET category = ? WHERE id = ? AND user_id = ?'
+  ).run(category, transactionId, userId);
+  return result.changes;
+}
+
 export function getTransactionsForExport(userId, { period, month, year, scope }) {
   const db = getDatabase();
   const where = ['user_id = ?'];

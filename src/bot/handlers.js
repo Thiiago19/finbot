@@ -7,6 +7,7 @@ import {
   updateSubscriptionAmount, insertSubscriptionTransaction,
   insertPendingBill, getUnresolvedPendingBill, resolvePendingBill,
   getAllCards, findCardByName, saveCard, updateTransactionCard,
+  updateTransactionCategory,
 } from '../db/queries.js';
 import { processMessage, saveTransaction } from '../services/transactions.js';
 import { runAlertsAfterExpense } from '../services/alerts.js';
@@ -95,6 +96,7 @@ function parseMonetaryAmount(text) {
 
 const pendingTransactions      = new Map();
 const pendingPdfImports        = new Map();
+const pendingBusinessReview    = new Map(); // key → { dbUserId, items:[{txId,amount,description}], selected:Set, page }
 const pendingPaymentUpdate     = new Map();
 const pendingInstallCount      = new Map();
 const pendingSubTypeSetup      = new Map(); // transactionId → { serviceName, totalAmount, telegramUserId }
@@ -128,6 +130,12 @@ export function registerHandlers(bot) {
 
   bot.action(/^pdf_imp_(.+)$/, handlePdfImport);
   bot.action(/^pdf_can_(.+)$/, handlePdfCancel);
+
+  bot.action(/^biz_yes_(.+)$/, handleBusinessReviewYes);
+  bot.action(/^biz_no_(.+)$/, handleBusinessReviewNo);
+  bot.action(/^biz_tog_(.+)_(\d+)$/, handleBusinessReviewToggle);
+  bot.action(/^biz_page_(.+)_(\d+)$/, handleBusinessReviewPage);
+  bot.action(/^biz_ok_(.+)$/, handleBusinessReviewConfirm);
 
   bot.action('limpar_confirmar', handleLimparConfirmar);
   bot.action('limpar_cancelar', handleLimparCancelar);
@@ -980,18 +988,171 @@ async function handlePdfImport(ctx) {
     if (!pending) { await ctx.editMessageText('⏰ Importação expirada. Envie o PDF novamente.'); return; }
     pendingPdfImports.delete(key);
     const user = getOrCreateUser(pending.userId, pending.firstName, pending.username);
+
     let saved = 0, failed = 0;
+    const items = []; // gastos salvos, candidatos a virar Negócio
     for (const parsed of pending.transactions) {
       const result = await saveTransaction(user.id, parsed, '[PDF]');
-      result.success ? saved++ : failed++;
+      if (result.success) {
+        saved++;
+        if (parsed.type === 'expense') {
+          items.push({ txId: result.transactionId, amount: parsed.amount, description: parsed.description || 'Sem descrição' });
+        }
+      } else {
+        failed++;
+      }
     }
+
     const msg = failed > 0
       ? `✅ *Importação concluída!*\n\n${saved} salvas, ${failed} falhou(aram). 😏`
       : `✅ *${saved} transação(ões) importada(s)!*\n\n_Seu saldo vai discordar. 🤡_`;
     await ctx.editMessageText(msg, { parse_mode: 'Markdown' });
+
+    // Fluxo de revisão de gastos do negócio (só faz sentido se houver gastos)
+    if (items.length === 0) return;
+
+    const reviewKey = `${ctx.from.id}_${Date.now()}`;
+    pendingBusinessReview.set(reviewKey, { dbUserId: user.id, items, selected: new Set(), page: 0 });
+    setTimeout(() => pendingBusinessReview.delete(reviewKey), 10 * 60 * 1000);
+
+    await ctx.reply(
+      'Alguma dessas compras foi para a sua loja/negócio? 🏪',
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback('✅ Sim, tem algumas', `biz_yes_${reviewKey}`),
+          Markup.button.callback('❌ Não, todas pessoais', `biz_no_${reviewKey}`),
+        ],
+      ])
+    );
   } catch (error) {
     console.error('[FinBot ERROR] Erro ao importar PDF:', error.message);
     await ctx.reply('❌ Erro ao importar as transações. Tente novamente.');
+  }
+}
+
+// ─── Revisão: marcar gastos importados como Negócio ──────────────────────────
+
+const BIZ_PER_PAGE = 10;
+
+function truncateDesc(s, max = 24) {
+  return s.length > max ? s.slice(0, max - 1) + '…' : s;
+}
+
+function buildBusinessReviewKeyboard(key, review) {
+  const { items, selected, page } = review;
+  const start = page * BIZ_PER_PAGE;
+  const pageItems = items.slice(start, start + BIZ_PER_PAGE);
+
+  const rows = pageItems.map((it, i) => {
+    const idx = start + i;
+    const mark = selected.has(idx) ? '✅ ' : '▫️ ';
+    const label = `${mark}${idx + 1}. ${formatCurrency(it.amount)} — ${truncateDesc(it.description)}`;
+    return [Markup.button.callback(label, `biz_tog_${key}_${idx}`)];
+  });
+
+  const nav = [];
+  if (page > 0) nav.push(Markup.button.callback('◀️ Anterior', `biz_page_${key}_${page - 1}`));
+  if (start + BIZ_PER_PAGE < items.length) nav.push(Markup.button.callback('Próxima ▶️', `biz_page_${key}_${page + 1}`));
+  if (nav.length) rows.push(nav);
+
+  rows.push([Markup.button.callback(`✅ Confirmar seleção (${selected.size})`, `biz_ok_${key}`)]);
+  return Markup.inlineKeyboard(rows);
+}
+
+async function handleBusinessReviewYes(ctx) {
+  try {
+    await ctx.answerCbQuery();
+    const key = ctx.match[1];
+    const review = pendingBusinessReview.get(key);
+    if (!review) { await ctx.editMessageText('⏰ Revisão expirada.'); return; }
+    await ctx.editMessageText(
+      'Selecione as transações da loja _(toque para marcar/desmarcar; pode escolher várias)_:',
+      { parse_mode: 'Markdown', ...buildBusinessReviewKeyboard(key, review) }
+    );
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro na revisão de negócio:', error.message);
+  }
+}
+
+async function handleBusinessReviewNo(ctx) {
+  try {
+    await ctx.answerCbQuery();
+    pendingBusinessReview.delete(ctx.match[1]);
+    await ctx.editMessageText(
+      '👍 *Ótimo!* Todas registradas como gastos pessoais.\n_Seu saldo agradece... ou não 😏_',
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro ao recusar revisão de negócio:', error.message);
+  }
+}
+
+async function handleBusinessReviewToggle(ctx) {
+  try {
+    await ctx.answerCbQuery();
+    const key = ctx.match[1];
+    const idx = Number(ctx.match[2]);
+    const review = pendingBusinessReview.get(key);
+    if (!review) { await ctx.editMessageText('⏰ Revisão expirada.'); return; }
+
+    if (review.selected.has(idx)) review.selected.delete(idx);
+    else review.selected.add(idx);
+
+    await ctx.editMessageReplyMarkup(buildBusinessReviewKeyboard(key, review).reply_markup);
+  } catch (error) {
+    // Telegram lança erro se a markup for idêntica — ignorar silenciosamente
+    if (!String(error.message).includes('message is not modified')) {
+      console.error('[FinBot ERROR] Erro ao alternar seleção:', error.message);
+    }
+  }
+}
+
+async function handleBusinessReviewPage(ctx) {
+  try {
+    await ctx.answerCbQuery();
+    const key = ctx.match[1];
+    const page = Number(ctx.match[2]);
+    const review = pendingBusinessReview.get(key);
+    if (!review) { await ctx.editMessageText('⏰ Revisão expirada.'); return; }
+    review.page = page;
+    await ctx.editMessageReplyMarkup(buildBusinessReviewKeyboard(key, review).reply_markup);
+  } catch (error) {
+    if (!String(error.message).includes('message is not modified')) {
+      console.error('[FinBot ERROR] Erro ao paginar revisão:', error.message);
+    }
+  }
+}
+
+async function handleBusinessReviewConfirm(ctx) {
+  try {
+    await ctx.answerCbQuery();
+    const key = ctx.match[1];
+    const review = pendingBusinessReview.get(key);
+    if (!review) { await ctx.editMessageText('⏰ Revisão expirada.'); return; }
+    pendingBusinessReview.delete(key);
+
+    if (review.selected.size === 0) {
+      await ctx.editMessageText(
+        '🤷 Nenhuma selecionada. Tudo continua como gasto pessoal então.',
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+
+    let updated = 0;
+    for (const idx of review.selected) {
+      const item = review.items[idx];
+      if (item && updateTransactionCategory(item.txId, review.dbUserId, 'Negócio')) updated++;
+    }
+
+    await ctx.editMessageText(
+      `🏪 *Atualizei ${updated} transação(ões) para Negócio!*\n\n` +
+      `_Misturando as finanças pessoais com as da loja... clássico empreendedor brasileiro 😏_`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro ao confirmar revisão de negócio:', error.message);
+    await ctx.reply('❌ Erro ao atualizar as categorias. Tente novamente.');
   }
 }
 
