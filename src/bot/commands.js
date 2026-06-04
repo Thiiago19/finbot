@@ -381,14 +381,31 @@ async function handleExportar(ctx) {
       throw new Error('Arquivo não gerado');
     }
 
-    // Carregar como Buffer em vez de stream — evita "socket hang up"
+    // Envio via fetch direto à API do Telegram — evita "socket hang up" do Telegraf.
+    // Usa fetch/FormData/Blob nativos do Node 24 (sem node-fetch/form-data).
     const fileBuffer = readFileSync(tmpPath);
     console.log('[FinBot] Enviando arquivo:', tmpPath, fileBuffer.length, 'bytes');
 
-    await ctx.replyWithDocument(
-      { source: fileBuffer, filename },
-      { caption: '📊 Aqui está sua planilha de arrependimentos... digo, de controle financeiro! 😏' }
+    const form = new FormData();
+    form.append('chat_id', String(ctx.chat.id));
+    form.append('caption', '📊 Aqui está sua planilha de arrependimentos... digo, de controle financeiro! 😏');
+    form.append(
+      'document',
+      new Blob([fileBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+      filename
     );
+
+    const token = process.env.TELEGRAM_TOKEN;
+    const response = await fetch(
+      `https://api.telegram.org/bot${token}/sendDocument`,
+      { method: 'POST', body: form }
+    );
+    const result = await response.json();
+
+    if (!result.ok) {
+      console.error('[FinBot ERROR] Telegram recusou o envio:', JSON.stringify(result));
+      throw new Error(result.description || 'Falha no envio do documento');
+    }
 
     console.log('[FinBot] Arquivo enviado com sucesso:', filename);
   } catch (error) {
