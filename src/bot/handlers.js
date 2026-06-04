@@ -558,23 +558,12 @@ async function processCreditFlow(ctx, txId, parsed, txDate, userId, installments
   await ctx.reply('💳 Qual cartão foi usado?', Markup.inlineKeyboard(cardButtons));
 }
 
-// Parcela em andamento (ex: "parcela 2/3"): registra a atual e cria as restantes,
-// sem perguntar sobre parcelamento. É sempre crédito.
-async function processOngoingInstallment(ctx, txId, parsed, txDate, userId, current, total) {
-  // Vincula o cartão se foi mencionado e estiver cadastrado
-  let cardLabel = '';
-  if (parsed.card_name && typeof parsed.card_name === 'string' && parsed.card_name.trim()) {
-    const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
-    const card = findCardByName(user.id, parsed.card_name.trim());
-    const name = card ? card.name : parsed.card_name.trim();
-    updateTransactionCard(txId, name);
-    cardLabel = `💳 ${name} — `;
-  }
-
+// Aplica as parcelas em andamento e responde (após o cartão estar resolvido)
+async function applyOngoingAndReply(ctx, txId, current, total, txDate, userId, cardName = null) {
   const { installmentAmount, remaining } = createOngoingInstallments(txId, current, total, userId, txDate);
+  const cardLabel = cardName ? `💳 ${cardName} — ` : '';
 
   if (remaining === 0) {
-    // Última parcela — nada futuro a criar
     await ctx.reply(
       `${cardLabel}*Parcela ${current}/${total}* registrada — a última! 🎉\n` +
       `_${formatCurrency(installmentAmount)}. Finalmente quita. Ou começa outra amanhã. 😏_`,
@@ -589,6 +578,42 @@ async function processOngoingInstallment(ctx, txId, parsed, txDate, userId, curr
     `_Esse dinheiro já era. Só não saiu da conta ainda. 😏_`,
     { parse_mode: 'Markdown' }
   );
+}
+
+// Parcela em andamento (ex: "parcela 2/3"): registra a atual e cria as restantes,
+// sem perguntar sobre parcelamento. É sempre crédito — então o cartão é obrigatório.
+async function processOngoingInstallment(ctx, txId, parsed, txDate, userId, current, total) {
+  const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
+
+  // (a) Cartão informado pela IA → resolver e aplicar direto
+  if (parsed.card_name && typeof parsed.card_name === 'string' && parsed.card_name.trim()) {
+    const card = findCardByName(user.id, parsed.card_name.trim());
+    const name = card ? card.name : parsed.card_name.trim();
+    updateTransactionCard(txId, name);
+    await applyOngoingAndReply(ctx, txId, current, total, txDate, userId, name);
+    return;
+  }
+
+  // (b) card_name null → SEMPRE perguntar o cartão antes de salvar as parcelas.
+  pendingPaymentUpdate.set(txId, {
+    amount: parsed.amount, category: parsed.category, description: parsed.description,
+    transactionDate: txDate, telegramUserId: ctx.from.id,
+    ongoingHint: { current, total },
+  });
+  setTimeout(() => pendingPaymentUpdate.delete(txId), 5 * 60 * 1000);
+
+  const cards = getAllCards(user.id);
+  if (cards.length === 0) {
+    pendingCardNameInput.set(ctx.from.id, { transactionId: txId });
+    await ctx.reply(
+      `💳 Parcela ${current}/${total} no crédito. Qual o nome do cartão? _(ex: Nubank, Inter, XP)_`,
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+  const cardButtons = cards.map((c) => [Markup.button.callback(`💳 ${c.name}`, `card_sel_${c.id}_${txId}`)]);
+  cardButtons.push([Markup.button.callback('➕ Novo cartão', `card_new_${txId}`)]);
+  await ctx.reply(`💳 Parcela ${current}/${total} — qual cartão?`, Markup.inlineKeyboard(cardButtons));
 }
 
 // ─── Método de pagamento ──────────────────────────────────────────────────────
@@ -668,6 +693,14 @@ async function handleCardSelection(ctx) {
       pendingPaymentUpdate.delete(transactionId);
       updateTransactionPayment(transactionId, 'credito', 1, 1, null, null);
       await ctx.editMessageText(`💳 *${card.name}* — assinatura no crédito anotada. 📺`, { parse_mode: 'Markdown' });
+      return;
+    }
+
+    // Parcela em andamento (ex: 2/3) → aplicar as restantes com o cartão escolhido
+    if (pending.ongoingHint) {
+      pendingPaymentUpdate.delete(transactionId);
+      await ctx.editMessageText(`💳 *${card.name}* selecionado!`, { parse_mode: 'Markdown' });
+      await applyOngoingAndReply(ctx, transactionId, pending.ongoingHint.current, pending.ongoingHint.total, pending.transactionDate, user.id, card.name);
       return;
     }
 
@@ -779,6 +812,14 @@ async function handleCardDueDayInput(ctx, text) {
   }
 
   const paymentPending = pendingPaymentUpdate.get(pending.transactionId);
+
+  // Parcela em andamento (ex: 2/3) aguardando cartão — aplicar agora com o cartão recém-cadastrado
+  if (paymentPending?.ongoingHint) {
+    pendingPaymentUpdate.delete(pending.transactionId);
+    await applyOngoingAndReply(ctx, pending.transactionId, paymentPending.ongoingHint.current, paymentPending.ongoingHint.total, paymentPending.transactionDate, user.id, pending.cardName);
+    return;
+  }
+
   if (paymentPending?.category === 'Assinaturas') {
     pendingPaymentUpdate.delete(pending.transactionId);
     updateTransactionPayment(pending.transactionId, 'credito', 1, 1, null, null);
