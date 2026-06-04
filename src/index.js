@@ -7,10 +7,11 @@ import { registerHandlers } from './bot/handlers.js';
 import { startNotificationJob } from './services/notifications.js';
 import { startSubscriptionScheduler } from './services/scheduler.js';
 
-// Servidor HTTP iniciado imediatamente — antes de qualquer outra coisa
+// Servidor HTTP iniciado imediatamente — antes de qualquer outra coisa.
+// Bind explícito em 0.0.0.0 para o Render conseguir detectar a porta.
 const port = process.env.PORT || 3000;
-createServer((_, res) => res.end('OK')).listen(port, () => {
-  console.log(`[FinBot] Servidor HTTP ouvindo na porta ${port}`);
+createServer((_, res) => res.end('OK')).listen(port, '0.0.0.0', () => {
+  console.log(`[FinBot] Servidor HTTP ouvindo em 0.0.0.0:${port}`);
 });
 
 function validateEnv() {
