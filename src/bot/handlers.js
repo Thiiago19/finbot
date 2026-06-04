@@ -7,7 +7,7 @@ import {
   updateSubscriptionAmount, insertSubscriptionTransaction,
   insertPendingBill, getUnresolvedPendingBill, resolvePendingBill,
   getAllCards, findCardByName, saveCard, updateTransactionCard,
-  updateTransactionCategory,
+  updateTransactionCategory, createOngoingInstallments,
 } from '../db/queries.js';
 import { processMessage, saveTransaction } from '../services/transactions.js';
 import { runAlertsAfterExpense } from '../services/alerts.js';
@@ -479,6 +479,15 @@ async function processPaymentData(ctx, saveResult, parsed, userId) {
   const method = normalizePaymentMethod(parsed.payment_method);
   const installments = normalizeInstallments(parsed.installments);
 
+  // (0) Parcela JÁ EM ANDAMENTO informada (ex: "parcela 2/3") → registra e cria as restantes,
+  //     sem perguntar nada sobre parcelamento.
+  const current = normalizeInstallments(parsed.current_installment);
+  const total = normalizeInstallments(parsed.total_installments);
+  if (current && total && total >= current) {
+    await processOngoingInstallment(ctx, txId, parsed, txDate, userId, current, total);
+    return;
+  }
+
   // (1) Sem método informado → pergunta tudo via fluxo clássico
   if (!method) {
     await askPaymentMethod(ctx, txId, parsed.amount, parsed.category, parsed.description, txDate);
@@ -547,6 +556,39 @@ async function processCreditFlow(ctx, txId, parsed, txDate, userId, installments
   const cardButtons = cards.map((c) => [Markup.button.callback(`💳 ${c.name}`, `card_sel_${c.id}_${txId}`)]);
   cardButtons.push([Markup.button.callback('➕ Novo cartão', `card_new_${txId}`)]);
   await ctx.reply('💳 Qual cartão foi usado?', Markup.inlineKeyboard(cardButtons));
+}
+
+// Parcela em andamento (ex: "parcela 2/3"): registra a atual e cria as restantes,
+// sem perguntar sobre parcelamento. É sempre crédito.
+async function processOngoingInstallment(ctx, txId, parsed, txDate, userId, current, total) {
+  // Vincula o cartão se foi mencionado e estiver cadastrado
+  let cardLabel = '';
+  if (parsed.card_name && typeof parsed.card_name === 'string' && parsed.card_name.trim()) {
+    const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
+    const card = findCardByName(user.id, parsed.card_name.trim());
+    const name = card ? card.name : parsed.card_name.trim();
+    updateTransactionCard(txId, name);
+    cardLabel = `💳 ${name} — `;
+  }
+
+  const { installmentAmount, remaining } = createOngoingInstallments(txId, current, total, userId, txDate);
+
+  if (remaining === 0) {
+    // Última parcela — nada futuro a criar
+    await ctx.reply(
+      `${cardLabel}*Parcela ${current}/${total}* registrada — a última! 🎉\n` +
+      `_${formatCurrency(installmentAmount)}. Finalmente quita. Ou começa outra amanhã. 😏_`,
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  await ctx.reply(
+    `${cardLabel}*Parcela ${current}/${total}* registrada!\n` +
+    `Criei as *${remaining}* restantes de *${formatCurrency(installmentAmount)}/mês* nos próximos meses. 💳\n` +
+    `_Esse dinheiro já era. Só não saiu da conta ainda. 😏_`,
+    { parse_mode: 'Markdown' }
+  );
 }
 
 // ─── Método de pagamento ──────────────────────────────────────────────────────

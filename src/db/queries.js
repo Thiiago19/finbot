@@ -342,6 +342,54 @@ export function createInstallmentTransactions(transactionId, totalInstallments, 
   return { installmentAmount, groupId };
 }
 
+// Parcela JÁ EM ANDAMENTO: a transação `transactionId` é a parcela `current` de `total`.
+// Marca essa como current/total e cria as restantes (current+1 .. total) nos meses seguintes.
+// O valor de cada parcela é o amount da transação (que já é o valor da parcela).
+export function createOngoingInstallments(transactionId, current, total, userId, transactionDate = null) {
+  const db = getDatabase();
+  const original = db.prepare('SELECT * FROM transactions WHERE id = ?').get(transactionId);
+  if (!original) throw new Error('Transação não encontrada');
+
+  const installmentAmount = original.amount; // já é o valor da parcela
+  const totalAmount = Math.round(installmentAmount * total * 100) / 100;
+  const groupId = `${userId}_${Date.now()}`;
+
+  const effectiveDate = transactionDate || original.transaction_date || original.created_at;
+  const { year: baseYear, month: baseMonth, day: baseDay } = parseDateParts(effectiveDate);
+
+  console.log('[FinBot] Criando parcelas em andamento:', {
+    current, total, installmentAmount, effectiveDate,
+    restantes: total - current,
+  });
+
+  // Marca a transação atual como a parcela `current`
+  db.prepare(
+    `UPDATE transactions
+     SET installments = ?, installment_number = ?,
+         installment_group_id = ?, total_amount = ?, payment_method = 'credito'
+     WHERE id = ?`
+  ).run(total, current, groupId, totalAmount, transactionId);
+
+  // Cria as parcelas futuras: current+1 .. total
+  for (let i = current + 1; i <= total; i++) {
+    const monthsAhead = i - current;
+    const d = new Date(baseYear, baseMonth + monthsAhead, baseDay);
+    const dateStr = formatLocalDate(d);
+    db.prepare(
+      `INSERT INTO transactions
+         (user_id, type, amount, category, description, raw_message,
+          payment_method, installments, installment_number, installment_group_id, total_amount, transaction_date, card_name)
+       VALUES (?, ?, ?, ?, ?, '[parcelado]', 'credito', ?, ?, ?, ?, ?, ?)`
+    ).run(
+      original.user_id, original.type, installmentAmount,
+      original.category, original.description,
+      total, i, groupId, totalAmount, dateStr, original.card_name || null
+    );
+  }
+
+  return { installmentAmount, groupId, remaining: total - current };
+}
+
 export function getCreditFatura(userId, year, month) {
   const db = getDatabase();
   const y = String(year);
