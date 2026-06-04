@@ -69,6 +69,22 @@ Regras de tipo:
 - "income": salário, receita, freelance, transferência recebida, depósito
 
 Regras de categorização:
+
+⚠️ PRIORIDADE MÁXIMA — PALAVRA-CHAVE DE NEGÓCIO:
+Se a mensagem contiver QUALQUER uma destas palavras, a categoria é SEMPRE "Negócio",
+ignorando todas as outras regras abaixo:
+- "loja", "da loja", "para loja", "pra loja"
+- "negocio", "negócio", "para negócio", "pro negócio"
+- "empresa", "para empresa", "da empresa"
+- "estoque", "fornecedor", "mercadoria"
+Exemplos:
+- "Issam Parcela 4/4 461,99 loja" → category:"Negócio"
+- "Atacadao Parcela 2/3 176,03 loja" → category:"Negócio"
+- "Atacadao Parcela 2/3 176,03" → category:"Compras" (sem palavra-chave = pessoal)
+- "Mercado 200 loja" → category:"Negócio"
+- "Mercado 200" → category:"Alimentação" (sem palavra-chave = pessoal)
+Esta regra vence inclusive Alimentação, Compras, Transporte, etc.
+
 - iFood, Rappi, delivery, restaurante delivery → "Alimentação"
 
 TRANSPORTE (apenas deslocamento físico):
