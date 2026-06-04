@@ -105,10 +105,22 @@ export async function analyzePDF(base64) {
   if (!model) return null;
 
   const prompt = `Analise este extrato ou documento financeiro.
-Liste TODAS as transações encontradas.
+Liste as transações encontradas.
+
+Ao analisar faturas de cartão de crédito, IGNORE completamente os seguintes tipos de lançamento:
+- Pagamento de fatura (ex: "Pagamento recebido", "Payment", "Pgto fatura", "Pagamento efetuado")
+- Estorno de pagamento
+- Crédito de limite
+- Saldo anterior
+- Encargos zerados
+- Qualquer lançamento que represente o pagamento da fatura em si
+
+Esses são movimentações internas do cartão, não gastos ou receitas reais do usuário.
+Retorne APENAS as compras e gastos reais realizados pelo titular do cartão.
+
 Retorne SOMENTE um array JSON, sem texto adicional:
-[{ "type": "expense|income", "amount": 00.00, "category": "Alimentação|Transporte|Moradia|Saúde|Lazer|Assinaturas|Educação|Compras|Investimentos|Receita|Outros", "description": "descrição", "confidence": 0.0 }]
-Se não encontrar transações, retorne um array vazio: []`;
+[{ "type": "expense|income", "amount": 00.00, "category": "Alimentação|Transporte|Moradia|Saúde|Lazer|Assinaturas|Educação|Compras|Investimentos|Receita|Negócio|Outros", "description": "descrição", "confidence": 0.0 }]
+Se não encontrar transações reais, retorne um array vazio: []`;
 
   try {
     const result = await model.generateContent([
