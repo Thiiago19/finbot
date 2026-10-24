@@ -8,12 +8,35 @@ import { registerHandlers } from './bot/handlers.js';
 import { startNotificationJob } from './services/notifications.js';
 import { startSubscriptionScheduler } from './services/scheduler.js';
 import { startKeepAlive } from './services/keepalive.js';
+import { getLaunchMode, startBot } from './bot/launch.js';
 import { describeProviders } from './ai/llm.js';
 
 // Servidor HTTP iniciado imediatamente — antes de qualquer outra coisa.
 // Bind explícito em 0.0.0.0 para o Render conseguir detectar a porta.
+// Também recebe os updates do Telegram quando o bot roda em modo webhook.
 const port = process.env.PORT || 3000;
-createServer((_, res) => res.end('OK')).listen(port, '0.0.0.0', () => {
+const launchMode = getLaunchMode();
+let webhookHandler = null;
+
+createServer(async (req, res) => {
+  if (launchMode.mode === 'webhook' && req.method === 'POST' && req.url === launchMode.path) {
+    if (!webhookHandler) {
+      // Bot ainda subindo: 503 faz o Telegram reenviar o update depois.
+      res.statusCode = 503;
+      res.end();
+      return;
+    }
+    try {
+      await webhookHandler(req, res);
+    } catch (error) {
+      console.error('[FinBot ERROR] Falha ao processar webhook:', error.message);
+      if (!res.headersSent) res.statusCode = 500;
+      res.end();
+    }
+    return;
+  }
+  res.end('OK');
+}).listen(port, '0.0.0.0', () => {
   console.log(`[FinBot] Servidor HTTP ouvindo em 0.0.0.0:${port}`);
 });
 
@@ -51,14 +74,12 @@ async function main() {
   process.once('SIGINT', () => shutdown(bot));
   process.once('SIGTERM', () => shutdown(bot));
 
-  // Os jobs vêm ANTES do launch: no polling, bot.launch() só retorna quando o bot para.
+  // Os jobs vêm antes: no polling, bot.launch() só retorna quando o bot para.
   startNotificationJob(bot);
   startSubscriptionScheduler(bot);
   startKeepAlive();
 
-  await bot.launch(() => {
-    console.log('[FinBot] Bot iniciado com sucesso! Aguardando mensagens...');
-  });
+  webhookHandler = await startBot(bot, launchMode);
 }
 
 function shutdown(bot) {
