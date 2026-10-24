@@ -1007,11 +1007,12 @@ async function handleVoice(ctx) {
     const parsed = await analyzeAudio(base64, mime_type || 'audio/ogg');
     if (!parsed) { await ctx.reply('😬 Não consegui extrair uma transação do áudio.'); return; }
     const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
+    const rawMessage = parsed.transcript ? `[áudio] ${parsed.transcript}` : '[áudio]';
     if (parsed.confidence >= 0.6) {
-      await saveAndReply(ctx, parsed, '[áudio]', user.id);
+      await saveAndReply(ctx, parsed, rawMessage, user.id);
     } else {
       const key = `${user.id}_${Date.now()}`;
-      pendingTransactions.set(key, { parsed, rawMessage: '[áudio]', userId: user.id });
+      pendingTransactions.set(key, { parsed, rawMessage, userId: user.id });
       setTimeout(() => pendingTransactions.delete(key), 5 * 60 * 1000);
       await ctx.reply(
         `🎙️ *Ouvi isso no seu áudio:*\n\n` + formatTransactionConfirm(parsed) + `\n\n_Tá certo isso? 🤔_`,

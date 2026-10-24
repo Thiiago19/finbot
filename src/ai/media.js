@@ -1,34 +1,15 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import axios from 'axios';
+// IA multimodal: imagem e PDF (Gemini) e áudio (Whisper do Groq, com Gemini de reserva).
 
-const MODEL = 'gemini-2.5-flash-lite';
+import axios from 'axios';
+import * as groq from './providers/groq.js';
+import * as gemini from './providers/gemini.js';
+import { extractJSON, extractJSONArray } from './json.js';
+import { parseTransaction } from './assistant.js';
 
 const VALID_CATEGORIES = [
   'Alimentação', 'Transporte', 'Moradia', 'Saúde', 'Lazer',
   'Assinaturas', 'Educação', 'Compras', 'Investimentos', 'Receita', 'Outros',
 ];
-
-function getModel() {
-  if (!process.env.GEMINI_API_KEY) return null;
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  return genAI.getGenerativeModel({ model: MODEL });
-}
-
-function extractJSON(text) {
-  const block = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const content = block ? block[1].trim() : text.trim();
-  const obj = content.match(/\{[\s\S]*\}/);
-  if (obj) return JSON.parse(obj[0]);
-  return JSON.parse(content);
-}
-
-function extractJSONArray(text) {
-  const block = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const content = block ? block[1].trim() : text.trim();
-  const arr = content.match(/\[[\s\S]*\]/);
-  if (arr) return JSON.parse(arr[0]);
-  return JSON.parse(content);
-}
 
 function normalizeTransaction(parsed) {
   if (!parsed || typeof parsed.amount !== 'number' || parsed.amount <= 0) return null;
@@ -59,8 +40,7 @@ export async function downloadTelegramFile(fileId) {
 }
 
 export async function analyzeImage(base64, mimeType = 'image/jpeg') {
-  const model = getModel();
-  if (!model) return null;
+  if (!gemini.isConfigured()) return null;
 
   const prompt = `Analise esta imagem de cupom fiscal, nota ou comprovante.
 Extraia: valor total, estabelecimento e categoria (Alimentação, Transporte, Moradia, Saúde, Lazer, Assinaturas, Educação, Compras, Investimentos).
@@ -68,20 +48,37 @@ Retorne SOMENTE JSON, sem texto adicional:
 { "type": "expense", "amount": 00.00, "category": "categoria", "description": "estabelecimento", "confidence": 0.0 }`;
 
   try {
-    const result = await model.generateContent([
-      { inlineData: { data: base64, mimeType } },
-      prompt,
-    ]);
-    return normalizeTransaction(extractJSON(result.response.text()));
+    const text = await gemini.generateFromParts([{ inlineData: { data: base64, mimeType } }, prompt]);
+    return normalizeTransaction(extractJSON(text));
   } catch (error) {
     console.error('[FinBot ERROR] Falha ao analisar imagem:', error.message);
     return null;
   }
 }
 
+// Áudio: transcreve com Whisper (Groq) e interpreta o texto com o mesmo parser
+// das mensagens digitadas — assim data, parcelas e cartão também funcionam por voz.
+// Sem GROQ_API_KEY (ou se o Whisper falhar), usa o Gemini direto no áudio.
 export async function analyzeAudio(base64, mimeType = 'audio/ogg') {
-  const model = getModel();
-  if (!model) return null;
+  if (groq.isConfigured()) {
+    try {
+      const transcript = await groq.transcribe(Buffer.from(base64, 'base64'), mimeType);
+      if (!transcript) return null;
+      const parsed = await parseTransaction(transcript, null);
+      if (!parsed) return null;
+      const normalized = normalizeTransaction(parsed);
+      return normalized ? { ...parsed, ...normalized, transcript } : null;
+    } catch (error) {
+      console.error('[FinBot ERROR] Whisper falhou:', error.message, gemini.isConfigured() ? '— usando Gemini' : '');
+      if (!gemini.isConfigured()) return null;
+    }
+  }
+
+  return analyzeAudioWithGemini(base64, mimeType);
+}
+
+async function analyzeAudioWithGemini(base64, mimeType) {
+  if (!gemini.isConfigured()) return null;
 
   const prompt = `Transcreva este áudio em português e extraia uma transação financeira.
 Retorne SOMENTE JSON, sem texto adicional:
@@ -89,11 +86,8 @@ Retorne SOMENTE JSON, sem texto adicional:
 Se não houver transação identificável, retorne confidence abaixo de 0.5.`;
 
   try {
-    const result = await model.generateContent([
-      { inlineData: { data: base64, mimeType } },
-      prompt,
-    ]);
-    return normalizeTransaction(extractJSON(result.response.text()));
+    const text = await gemini.generateFromParts([{ inlineData: { data: base64, mimeType } }, prompt]);
+    return normalizeTransaction(extractJSON(text));
   } catch (error) {
     console.error('[FinBot ERROR] Falha ao analisar áudio:', error.message);
     return null;
@@ -101,8 +95,7 @@ Se não houver transação identificável, retorne confidence abaixo de 0.5.`;
 }
 
 export async function analyzePDF(base64) {
-  const model = getModel();
-  if (!model) return null;
+  if (!gemini.isConfigured()) return null;
 
   const prompt = `Analise este extrato ou documento financeiro.
 Liste as transações encontradas.
@@ -123,11 +116,8 @@ Retorne SOMENTE um array JSON, sem texto adicional:
 Se não encontrar transações reais, retorne um array vazio: []`;
 
   try {
-    const result = await model.generateContent([
-      { inlineData: { data: base64, mimeType: 'application/pdf' } },
-      prompt,
-    ]);
-    const raw = extractJSONArray(result.response.text());
+    const text = await gemini.generateFromParts([{ inlineData: { data: base64, mimeType: 'application/pdf' } }, prompt]);
+    const raw = extractJSONArray(text);
     if (!Array.isArray(raw)) return [];
     return raw.map(normalizeTransaction).filter(Boolean);
   } catch (error) {
