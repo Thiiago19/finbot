@@ -14,6 +14,7 @@ import { runAlertsAfterExpense } from '../services/alerts.js';
 import { generateSarcasticResponse } from '../ai/gemini.js';
 import { downloadTelegramFile, analyzeImage, analyzeAudio, analyzePDF } from '../ai/media.js';
 import { pendingBillAmount } from '../state.js';
+import { todayStr } from '../utils/date.js';
 import {
   formatCurrency,
   formatTransactionConfirm,
@@ -164,7 +165,7 @@ async function saveAndReply(ctx, parsed, rawSource, userId) {
     ? formatSarcasticSave(sarcasticText, parsed, saveResult.categoryTotal)
     : `✅ *Registrado!*\n\n${formatCurrency(parsed.amount)} em ${parsed.category}`;
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayStr();
   const parsedDate = (parsed.date && parsed.date !== 'null') ? parsed.date : null;
   if (parsedDate && parsedDate !== today) {
     const d = new Date(parsed.date + 'T12:00:00');
@@ -450,7 +451,7 @@ function normalizeInstallments(n) {
 }
 
 function formatInstallmentRange(baseDateStr, n) {
-  const clean = (baseDateStr || new Date().toISOString().split('T')[0])
+  const clean = (baseDateStr || todayStr())
     .split('T')[0].split(' ')[0];
   const [by, bm] = clean.split('-').map(Number);
   const startIdx = bm - 1;

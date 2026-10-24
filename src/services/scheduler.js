@@ -6,6 +6,7 @@ import {
 } from '../db/queries.js';
 import { formatCurrency } from '../bot/formatter.js';
 import { pendingBillAmount } from '../state.js';
+import { toLocalDateStr } from '../utils/date.js';
 
 function getLastDayOfMonth(year, month) {
   return new Date(year, month + 1, 0).getDate();
@@ -15,7 +16,7 @@ async function runSubscriptionBilling(bot) {
   const today = new Date();
   const todayDay = today.getDate();
   const lastDay = getLastDayOfMonth(today.getFullYear(), today.getMonth());
-  const todayStr = today.toISOString().split('T')[0];
+  const todayStr = toLocalDateStr(today);
 
   let subs;
   try {

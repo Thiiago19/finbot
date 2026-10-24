@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import './config/timezone.js'; // precisa vir antes de qualquer uso de Date
 import { createServer } from 'http';
 import { Telegraf } from 'telegraf';
 import { initDatabase, closeDatabase } from './db/database.js';

@@ -1,4 +1,7 @@
-export const PARSE_TRANSACTION_PROMPT = `Você é um extrator de dados financeiros. Analise a mensagem do usuário e extraia informações de transações financeiras.
+// O ano e a data de hoje são injetados em tempo de execução para o prompt não
+// "envelhecer" na virada do ano e para a IA conseguir resolver "ontem", "dia 3" etc.
+export function buildParseTransactionPrompt({ today, year }) {
+  return `Você é um extrator de dados financeiros. Analise a mensagem do usuário e extraia informações de transações financeiras.
 
 Retorne SOMENTE um objeto JSON válido, sem texto adicional, sem markdown, sem explicações. Apenas o JSON puro.
 
@@ -45,24 +48,25 @@ Exemplos:
 
 Regras para o campo "date":
 
-ANO ATUAL: O ano atual é 2026. Quando o usuário não informar o ano, use 2026.
-NUNCA use 2024 ou 2025 como padrão. SEMPRE use 2026 se o ano não for explicitado.
+DATA DE HOJE: ${today}.
+ANO ATUAL: O ano atual é ${year}. Quando o usuário não informar o ano, use ${year}.
+NUNCA use ${year - 2} ou ${year - 1} como padrão. SEMPRE use ${year} se o ano não for explicitado.
 
 - Se a mensagem mencionar uma data específica → extrair e formatar como YYYY-MM-DD
-- "ontem" → dia anterior à data de hoje (em 2026)
-- "semana passada" → 7 dias atrás (em 2026)
-- "dia 3" → dia 3 do mês atual de 2026
-- "dia 16/01" → 2026-01-16
-- "dia 10 de abril" → 2026-04-10
-- "mês passado" → mesmo dia do mês anterior de 2026
-- Se a data já passou neste ano de 2026 → usar 2026 mesmo (registro retroativo)
-- Se a data é futura em 2026 → usar 2026
+- "ontem" → dia anterior à data de hoje (em ${year})
+- "semana passada" → 7 dias atrás (em ${year})
+- "dia 3" → dia 3 do mês atual de ${year}
+- "dia 16/01" → ${year}-01-16
+- "dia 10 de abril" → ${year}-04-10
+- "mês passado" → mesmo dia do mês anterior de ${year}
+- Se a data já passou neste ano de ${year} → usar ${year} mesmo (registro retroativo)
+- Se a data é futura em ${year} → usar ${year}
 - Se nenhuma data for mencionada → retornar null
 
 Exemplos obrigatórios:
-- "gastei 100 no dia 16/01" → date: "2026-01-16" (NÃO 2025-01-16, NÃO 2024-01-16)
-- "paguei 50 dia 10 de abril" → date: "2026-04-10"
-- "comprei dia 3" → date: dia 3 do mês atual de 2026
+- "gastei 100 no dia 16/01" → date: "${year}-01-16" (NÃO ${year - 1}-01-16, NÃO ${year - 2}-01-16)
+- "paguei 50 dia 10 de abril" → date: "${year}-04-10"
+- "comprei dia 3" → date: dia 3 do mês atual de ${year}
 
 Regras de tipo:
 - "expense": gastos, compras, pagamentos, débitos
@@ -152,6 +156,7 @@ Regras para o campo "description":
   * "Academia que você vai uma vez por mês 🏋️"
   * "Mercado (aka sobrevivência) 🛒"
   * Para receitas: "Salário! O dia mais bonito do mês 💰"`;
+}
 
 export const INSIGHTS_PROMPT = `Você é o FinBot, um assistente financeiro que diz a verdade com bom humor, sarcasmo leve e ironia afetiva — como aquele amigo que te cutuca mas no fundo quer o seu bem.
 

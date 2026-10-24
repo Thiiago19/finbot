@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { PARSE_TRANSACTION_PROMPT, INSIGHTS_PROMPT, SARCASTIC_RESPONSE_PROMPT } from './prompts.js';
+import { buildParseTransactionPrompt, INSIGHTS_PROMPT, SARCASTIC_RESPONSE_PROMPT } from './prompts.js';
+import { todayStr, currentYear } from '../utils/date.js';
 
 function getModel() {
   if (!process.env.GEMINI_API_KEY) return null;
@@ -19,7 +20,7 @@ export async function parseTransaction(message, userId) {
   const model = getModel();
   if (!model) return null;
 
-  const prompt = `${PARSE_TRANSACTION_PROMPT}
+  const prompt = `${buildParseTransactionPrompt({ today: todayStr(), year: currentYear() })}
 
 Mensagem do usuário: "${message}"
 
