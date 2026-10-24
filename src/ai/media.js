@@ -67,7 +67,10 @@ export async function analyzeAudio(base64, mimeType = 'audio/ogg') {
       const parsed = await parseTransaction(transcript, null);
       if (!parsed) return null;
       const normalized = normalizeTransaction(parsed);
-      return normalized ? { ...parsed, ...normalized, transcript } : null;
+      if (!normalized) return null;
+      // normalizeTransaction não conhece 'Negócio' (gastos da loja); por voz, preserva.
+      const category = parsed.category === 'Negócio' ? 'Negócio' : normalized.category;
+      return { ...parsed, ...normalized, category, transcript };
     } catch (error) {
       console.error('[FinBot ERROR] Whisper falhou:', error.message, gemini.isConfigured() ? '— usando Gemini' : '');
       if (!gemini.isConfigured()) return null;
