@@ -11,8 +11,9 @@ import {
 } from '../db/queries.js';
 import { processMessage, saveTransaction } from '../services/transactions.js';
 import { runAlertsAfterExpense } from '../services/alerts.js';
-import { generateSarcasticResponse } from '../ai/gemini.js';
+import { generateSarcasticResponse } from '../ai/assistant.js';
 import { downloadTelegramFile, analyzeImage, analyzeAudio, analyzePDF } from '../ai/media.js';
+import { isTextAIEnabled, isVisionAIEnabled, isAudioAIEnabled } from '../ai/llm.js';
 import { pendingBillAmount } from '../state.js';
 import { todayStr } from '../utils/date.js';
 import {
@@ -942,10 +943,10 @@ async function handleTextMessage(ctx) {
     const result = await processMessage(text, user.id);
 
     if (!result.success) {
-      const aiUnavailable = !process.env.GEMINI_API_KEY;
+      const aiUnavailable = !isTextAIEnabled();
       await ctx.reply(
         aiUnavailable
-          ? `⚙️ A IA está desabilitada no momento (GEMINI_API_KEY não configurada).\n\nUse os comandos disponíveis: /resumo, /saldo, /gastos, /metas ou /ajuda.`
+          ? `⚙️ A IA está desabilitada no momento (nenhuma chave de IA configurada).\n\nUse os comandos disponíveis: /resumo, /saldo, /gastos, /metas ou /ajuda.`
           : `🤔 Não identifiquei uma transação financeira na sua mensagem.\n\nTente algo como:\n• _"Gastei 50 no mercado"_\n• _"Paguei 120 de internet"_\n• _"Recebi 2000 de freelance"_\n\nUse /ajuda para ver mais exemplos! 😊`,
         { parse_mode: 'Markdown' }
       );
@@ -983,7 +984,7 @@ async function handleTextMessage(ctx) {
 
 async function handlePhoto(ctx) {
   try {
-    if (!process.env.GEMINI_API_KEY) { await ctx.reply('⚙️ IA não configurada.'); return; }
+    if (!isVisionAIEnabled()) { await ctx.reply('⚙️ IA não configurada.'); return; }
     await ctx.reply('🔍 Analisando o cupom... aguenta um segundo 🙄');
     const photos = ctx.message.photo;
     const base64 = await downloadTelegramFile(photos[photos.length - 1].file_id);
@@ -999,7 +1000,7 @@ async function handlePhoto(ctx) {
 
 async function handleVoice(ctx) {
   try {
-    if (!process.env.GEMINI_API_KEY) { await ctx.reply('⚙️ IA não configurada.'); return; }
+    if (!isAudioAIEnabled()) { await ctx.reply('⚙️ IA não configurada.'); return; }
     await ctx.reply('🎙️ Ouvindo seu áudio... esperamos que seja sobre dinheiro 😏');
     const { file_id, mime_type } = ctx.message.voice;
     const base64 = await downloadTelegramFile(file_id);
@@ -1032,7 +1033,7 @@ async function handleDocument(ctx) {
   try {
     const doc = ctx.message.document;
     if (doc.mime_type !== 'application/pdf') { await ctx.reply('📎 Só consigo analisar arquivos PDF por enquanto.'); return; }
-    if (!process.env.GEMINI_API_KEY) { await ctx.reply('⚙️ IA não configurada.'); return; }
+    if (!isVisionAIEnabled()) { await ctx.reply('⚙️ IA não configurada.'); return; }
     await ctx.reply('📄 Analisando o PDF... isso pode demorar um pouco ☕');
     const base64 = await downloadTelegramFile(doc.file_id);
     const transactions = await analyzePDF(base64);

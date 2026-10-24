@@ -7,6 +7,7 @@ import { registerCommands } from './bot/commands.js';
 import { registerHandlers } from './bot/handlers.js';
 import { startNotificationJob } from './services/notifications.js';
 import { startSubscriptionScheduler } from './services/scheduler.js';
+import { describeProviders } from './ai/llm.js';
 
 // Servidor HTTP iniciado imediatamente — antes de qualquer outra coisa.
 // Bind explícito em 0.0.0.0 para o Render conseguir detectar a porta.
@@ -19,8 +20,13 @@ function validateEnv() {
   if (!process.env.TELEGRAM_TOKEN) {
     throw new Error('Variável de ambiente ausente: TELEGRAM_TOKEN');
   }
-  if (!process.env.GEMINI_API_KEY) {
-    console.log('[FinBot] GEMINI_API_KEY não configurada — funcionalidades de IA desabilitadas.');
+  const ai = describeProviders();
+  console.log(
+    `[FinBot] IA — texto: ${ai.text.join(' → ') || 'desabilitada'} | ` +
+      `áudio: ${ai.audio.join(' → ') || 'desabilitado'} | imagem/PDF: ${ai.vision.join(', ') || 'desabilitado'}`
+  );
+  if (!ai.text.length) {
+    console.log('[FinBot] Nenhuma chave de IA (GROQ_API_KEY / GEMINI_API_KEY) — interpretação de texto desabilitada.');
   }
 }
 

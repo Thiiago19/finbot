@@ -1,4 +1,4 @@
-import { parseTransaction } from '../ai/gemini.js';
+import { parseTransaction } from '../ai/assistant.js';
 import { todayStr } from '../utils/date.js';
 import {
   insertTransaction,
