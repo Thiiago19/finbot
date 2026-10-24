@@ -116,6 +116,8 @@ export function registerHandlers(bot) {
 
   bot.action(/^confirm_(.+)$/, handleConfirmCallback);
   bot.action('cancel_transaction', handleCancelCallback);
+  bot.action(/^correct_(.+)$/, handleCorrectCategory);
+  bot.action(/^ccat_(.+)_(\d+)$/, handleCategoryPick);
 
   bot.action(/^pay_(cred|deb|pix|din)_(\d+)$/, handlePaymentMethod);
   bot.action(/^inst_(av|pr)_(\d+)$/, handleInstallmentChoice);
@@ -962,13 +964,7 @@ async function handleTextMessage(ctx) {
 
       await ctx.reply(formatTransactionConfirm(parsed), {
         parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([
-          [
-            Markup.button.callback('✅ Confirmar', `confirm_${key}`),
-            Markup.button.callback('❌ Cancelar', 'cancel_transaction'),
-          ],
-          [Markup.button.callback('✏️ Corrigir categoria', `correct_${key}`)],
-        ]),
+        ...confirmKeyboard(key),
       });
       return;
     }
@@ -1253,6 +1249,68 @@ async function handlePdfCancel(ctx) {
 }
 
 // ─── Confirmação texto/voz ────────────────────────────────────────────────────
+
+// ─── Corrigir categoria (card de confirmação) ────────────────────────────────
+
+const CORRECTABLE_CATEGORIES = [
+  'Alimentação', 'Transporte', 'Moradia', 'Saúde', 'Lazer', 'Assinaturas',
+  'Educação', 'Compras', 'Investimentos', 'Receita', 'Negócio', 'Outros',
+];
+
+function confirmKeyboard(key) {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('✅ Confirmar', `confirm_${key}`),
+      Markup.button.callback('❌ Cancelar', 'cancel_transaction'),
+    ],
+    [Markup.button.callback('✏️ Corrigir categoria', `correct_${key}`)],
+  ]);
+}
+
+async function handleCorrectCategory(ctx) {
+  try {
+    await ctx.answerCbQuery();
+    const key = ctx.match[1];
+    if (!pendingTransactions.has(key)) {
+      await ctx.editMessageText('⏰ Confirmação expirada. Envie a mensagem novamente.');
+      return;
+    }
+
+    const buttons = CORRECTABLE_CATEGORIES.map((cat, i) => Markup.button.callback(cat, `ccat_${key}_${i}`));
+    const rows = [];
+    for (let i = 0; i < buttons.length; i += 3) rows.push(buttons.slice(i, i + 3));
+
+    await ctx.editMessageText('✏️ Qual é a categoria certa? (a IA também erra, quem diria 🙄)', {
+      ...Markup.inlineKeyboard(rows),
+    });
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro ao abrir correção de categoria:', error.message);
+  }
+}
+
+async function handleCategoryPick(ctx) {
+  try {
+    await ctx.answerCbQuery();
+    const key = ctx.match[1];
+    const category = CORRECTABLE_CATEGORIES[Number(ctx.match[2])];
+    const pending = pendingTransactions.get(key);
+    if (!pending || !category) {
+      await ctx.editMessageText('⏰ Confirmação expirada. Envie a mensagem novamente.');
+      return;
+    }
+
+    pending.parsed.category = category;
+    // Receita é categoria de entrada; qualquer outra é gasto.
+    pending.parsed.type = category === 'Receita' ? 'income' : 'expense';
+
+    await ctx.editMessageText(formatTransactionConfirm(pending.parsed), {
+      parse_mode: 'Markdown',
+      ...confirmKeyboard(key),
+    });
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro ao corrigir categoria:', error.message);
+  }
+}
 
 async function handleConfirmCallback(ctx) {
   try {
