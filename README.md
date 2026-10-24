@@ -16,7 +16,7 @@ FinBot é um bot de Telegram que entende suas mensagens em linguagem natural par
 
 ## Pré-requisitos
 
-- [Node.js 22.13+](https://nodejs.org/) *(usa o SQLite embutido do Node — sem dependências nativas; recomendado 24)*
+- [Node.js 22.13+](https://nodejs.org/) *(recomendado 24)*
 - Conta no Telegram
 - Chave gratuita do [Groq](https://console.groq.com/keys) (texto e áudio)
 - Chave gratuita do [Google AI Studio](https://aistudio.google.com/apikey) (imagem, PDF e reserva)
@@ -81,6 +81,15 @@ NODE_ENV=development
 ```
 
 Variáveis opcionais (modelos, ordem dos provedores, fuso) estão documentadas no `.env.example`.
+
+## Banco de dados
+
+- **Local**: sem configurar nada, usa um arquivo SQLite (`DATABASE_PATH`, padrão `./finbot.db`).
+- **Produção (Render gratuito)**: o disco é apagado a cada deploy, reinício ou hibernação. Use o [Turso](https://turso.tech) (SQLite na nuvem, plano gratuito):
+  1. Crie um banco em app.turso.tech.
+  2. Copie a URL (`libsql://...`) e gere um token.
+  3. No Render, adicione `TURSO_DATABASE_URL` e `TURSO_AUTH_TOKEN`.
+  4. No log de inicialização deve aparecer `Banco de dados inicializado: Turso`.
 
 ## Exemplos de Uso
 
