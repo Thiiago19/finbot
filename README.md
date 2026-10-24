@@ -5,7 +5,10 @@ FinBot é um bot de Telegram que entende suas mensagens em linguagem natural par
 ## Funcionalidades
 
 - 💬 **Linguagem natural**: diga "gastei 45 no iFood" e o bot entende e registra
-- 🤖 **IA integrada**: Claude interpreta e categoriza suas transações
+- 🤖 **IA integrada**: Groq (texto e áudio) e Gemini (imagem e PDF) interpretam e categorizam suas transações, com fallback automático entre eles
+- 🎙️ **Áudio, foto e PDF**: mande um áudio, a foto do cupom ou a fatura em PDF
+- 💳 **Cartões, parcelas e assinaturas**: vencimentos, parcelas retroativas e cobranças recorrentes
+- 🏪 **Pessoal × loja**: use a palavra "loja" para separar gastos do negócio
 - 📊 **Resumo mensal**: receitas, gastos, saldo, top categorias e comparativo com o mês anterior
 - 💡 **Insights personalizados**: análises geradas pela IA baseadas nos seus hábitos reais
 - ⚠️ **Alertas inteligentes**: aviso quando você atinge 80% ou 100% do limite de uma categoria
@@ -13,9 +16,10 @@ FinBot é um bot de Telegram que entende suas mensagens em linguagem natural par
 
 ## Pré-requisitos
 
-- [Node.js 24+](https://nodejs.org/) *(usa o SQLite embutido do Node.js 24 — sem dependências nativas)*
+- [Node.js 22.13+](https://nodejs.org/) *(usa o SQLite embutido do Node — sem dependências nativas; recomendado 24)*
 - Conta no Telegram
-- Conta na [Anthropic](https://console.anthropic.com/) com créditos de API
+- Chave gratuita do [Groq](https://console.groq.com/keys) (texto e áudio)
+- Chave gratuita do [Google AI Studio](https://aistudio.google.com/apikey) (imagem, PDF e reserva)
 
 ## Instalação
 
@@ -57,23 +61,26 @@ O banco de dados SQLite é criado automaticamente na primeira execução.
 5. O BotFather enviará seu token no formato: `1234567890:ABCdefGHIjklmNOPqrstUVwxyz`
 6. Copie esse token para a variável `TELEGRAM_TOKEN` no `.env`
 
-## Como obter a API Key da Anthropic
+## Chaves de IA
 
-1. Acesse [console.anthropic.com](https://console.anthropic.com/)
-2. Crie uma conta ou faça login
-3. Vá em **API Keys** → **Create Key**
-4. Copie a chave para a variável `ANTHROPIC_API_KEY` no `.env`
+| Provedor | Onde pegar | Usado para |
+|---|---|---|
+| Groq (`GROQ_API_KEY`) | [console.groq.com/keys](https://console.groq.com/keys) | Texto e áudio (principal) |
+| Gemini (`GEMINI_API_KEY`) | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | Imagem, PDF e reserva do texto/áudio |
 
-> **Nota**: A API da Anthropic é paga por uso. O FinBot usa `max_tokens: 300` para parsing e `max_tokens: 500` para insights, mantendo custos baixos.
+Os dois têm plano gratuito. Os limites são por modelo e aparecem no painel de cada um (Groq: *Settings → Limits*; Google: *AI Studio → Rate limits*). Se o Groq estourar a cota, o texto cai automaticamente para o Gemini.
 
 ## Arquivo .env
 
 ```env
 TELEGRAM_TOKEN=1234567890:ABCdefGHIjklmNOPqrstUVwxyz
-ANTHROPIC_API_KEY=sk-ant-...
+GROQ_API_KEY=gsk_...
+GEMINI_API_KEY=AIza...
 DATABASE_PATH=./finbot.db
 NODE_ENV=development
 ```
+
+Variáveis opcionais (modelos, ordem dos provedores, fuso) estão documentadas no `.env.example`.
 
 ## Exemplos de Uso
 
@@ -107,6 +114,14 @@ NODE_ENV=development
 | `/gastos` | Últimas 10 transações registradas |
 | `/metas` | Metas financeiras com barra de progresso |
 | `/ajuda` | Ajuda completa com exemplos |
+| `/fatura` | Fatura do cartão |
+| `/parcelas` | Compras parceladas em aberto |
+| `/assinaturas` | Assinaturas e cobranças recorrentes |
+| `/cartoes` | Cartões cadastrados |
+| `/contas` | Contas variáveis (luz, água…) |
+| `/negocio` | Gastos da loja |
+| `/exportar` | Exporta as transações para Excel |
+| `/limpar` / `/gerenciar` | Limpeza de dados |
 
 ## Categorias Reconhecidas
 
@@ -122,6 +137,7 @@ NODE_ENV=development
 | 🛍️ | Compras | Roupas, eletrônicos |
 | 📈 | Investimentos | Ações, fundos |
 | 💰 | Receita | Salário, freelance |
+| 🏪 | Negócio | Gastos da loja |
 | 📦 | Outros | Tudo o mais |
 
 ## Limites de Orçamento Padrão (mensais)
@@ -142,8 +158,8 @@ Se você não definir limites personalizados, o FinBot usa:
 ## Desenvolvimento
 
 ```bash
-# Rodar com reload automático (Node.js 20+)
-npm run dev
+npm run dev   # reload automático
+npm test      # testes automatizados (node:test)
 ```
 
 ## Estrutura do Projeto
@@ -151,22 +167,19 @@ npm run dev
 ```
 finbot/
 ├── src/
-│   ├── index.js          # Entry point
-│   ├── bot/
-│   │   ├── commands.js   # Comandos do bot
-│   │   ├── handlers.js   # Handler de mensagens
-│   │   └── formatter.js  # Formatação das respostas
+│   ├── index.js               # Entry point
+│   ├── config/timezone.js     # Fuso do app (America/Sao_Paulo)
+│   ├── utils/date.js          # Datas no fuso do app
+│   ├── bot/                   # commands, handlers, formatter
 │   ├── ai/
-│   │   ├── claude.js     # Integração com Claude API
-│   │   └── prompts.js    # System prompts
-│   ├── db/
-│   │   ├── database.js   # Conexão SQLite
-│   │   ├── schema.sql    # Schema do banco
-│   │   └── queries.js    # Queries SQL
-│   └── services/
-│       ├── transactions.js  # Lógica de transações
-│       ├── insights.js      # Geração de insights
-│       └── alerts.js        # Sistema de alertas
+│   │   ├── llm.js             # Roteador de IA de texto (Groq → Gemini)
+│   │   ├── assistant.js       # Parse, resposta sarcástica, insights
+│   │   ├── media.js           # Imagem, áudio, PDF
+│   │   ├── prompts.js         # Prompts
+│   │   └── providers/         # groq.js, gemini.js
+│   ├── db/                    # database, schema.sql, queries
+│   └── services/              # transactions, insights, alerts, scheduler, exporter…
+├── test/                      # Testes (npm test)
 └── .env.example
 ```
 

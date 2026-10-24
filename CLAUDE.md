@@ -1,103 +1,89 @@
 # FinBot — Guia para Claude Code
 
-## Objetivo do Projeto
+## Objetivo
 
-FinBot é um assistente financeiro pessoal via Telegram que usa IA (Claude) para interpretar mensagens em linguagem natural, categorizar transações automaticamente e gerar insights financeiros personalizados.
+Assistente financeiro pessoal via Telegram. Interpreta mensagens em linguagem natural (texto, áudio, foto de cupom, PDF de fatura), categoriza com IA e separa gastos pessoais dos da loja (palavra-chave `loja` → categoria `Negócio`). Tom sarcástico em todas as respostas.
 
-## Stack Técnica
+## Stack
 
-- **Runtime**: Node.js 20+ com ES Modules (`"type": "module"`)
+- **Runtime**: Node.js 22.13+ (produção no Render usa 24) com ES Modules
 - **Bot**: Telegraf v4
-- **IA**: Anthropic SDK (`@anthropic-ai/sdk`) — modelo `claude-sonnet-4-20250514`
-- **Banco de dados**: SQLite nativo do Node.js 24+ (`node:sqlite`, módulo built-in, síncrono, sem dependência externa)
-- **Env vars**: `dotenv`
-- **Linguagem**: JavaScript moderno com async/await
+- **IA de texto**: Groq (`openai/gpt-oss-120b`) com fallback para Gemini — ver `src/ai/llm.js`
+- **Áudio**: Whisper no Groq (`whisper-large-v3-turbo`) → mesmo parser do texto; fallback Gemini
+- **Imagem e PDF**: Gemini (`gemini-2.5-flash-lite`, configurável por `GEMINI_MODEL`)
+- **Banco**: `node:sqlite` (`DatabaseSync`, síncrono, embutido no Node — sem better-sqlite3)
+- **Deploy**: Render (web service gratuito) + GitHub
 
-## Estrutura de Pastas
+## Estrutura
 
 ```
-finbot/
-├── src/
-│   ├── index.js               ← entry point, inicializa DB e bot
-│   ├── bot/
-│   │   ├── commands.js        ← /start /resumo /saldo /gastos /metas /ajuda
-│   │   ├── handlers.js        ← mensagens texto e callbacks inline
-│   │   └── formatter.js       ← formatação de mensagens e moeda
-│   ├── ai/
-│   │   ├── claude.js          ← chamadas à API do Claude
-│   │   └── prompts.js         ← system prompts centralizados
-│   ├── db/
-│   │   ├── database.js        ← conexão e init do SQLite
-│   │   ├── schema.sql         ← DDL das tabelas
-│   │   └── queries.js         ← todas as queries SQL
-│   └── services/
-│       ├── transactions.js    ← lógica de negócio de transações
-│       ├── insights.js        ← orquestração de insights via IA
-│       └── alerts.js          ← alertas de orçamento e fim de mês
+src/
+├── index.js                 ← entry point; servidor HTTP p/ o Render; boot do bot
+├── config/timezone.js       ← fixa process.env.TZ (PRIMEIRO import do index.js)
+├── utils/date.js            ← todayStr(), toLocalDateStr(), currentYear()
+├── state.js                 ← estado em memória compartilhado
+├── ai/
+│   ├── llm.js               ← roteador de texto (ordem em AI_TEXT_PROVIDERS)
+│   ├── assistant.js         ← parseTransaction, generateSarcasticResponse, generateInsights
+│   ├── media.js             ← analyzeImage, analyzeAudio, analyzePDF, downloadTelegramFile
+│   ├── prompts.js           ← prompts; buildParseTransactionPrompt({ today, year })
+│   ├── json.js              ← extractJSON / extractJSONArray
+│   └── providers/           ← groq.js, gemini.js, errors.js (ProviderError)
+├── bot/                     ← commands.js, handlers.js, formatter.js
+├── db/                      ← database.js, schema.sql, queries.js
+└── services/                ← transactions, insights, alerts, notifications, scheduler, exporter
+test/                        ← node:test (npm test)
 ```
 
-## Variáveis de Ambiente
+## Variáveis de ambiente
 
-Copie `.env.example` para `.env` e preencha:
+| Variável | Obrigatória | Descrição |
+|---|---|---|
+| `TELEGRAM_TOKEN` | sim | Token do BotFather |
+| `GROQ_API_KEY` | recomendada | Texto e áudio (principal) |
+| `GEMINI_API_KEY` | recomendada | Imagem, PDF e reserva |
+| `DATABASE_PATH` | não | Padrão `./finbot.db` |
+| `GROQ_MODEL`, `GROQ_STT_MODEL`, `GROQ_REASONING_EFFORT`, `GEMINI_MODEL`, `AI_TEXT_PROVIDERS`, `APP_TIMEZONE` | não | Ver `.env.example` |
 
-| Variável | Descrição |
-|---|---|
-| `TELEGRAM_TOKEN` | Token do bot obtido no BotFather |
-| `ANTHROPIC_API_KEY` | Chave da API da Anthropic |
-| `DATABASE_PATH` | Caminho do arquivo SQLite (padrão: `./finbot.db`) |
-| `NODE_ENV` | `development` ou `production` |
+Nunca commitar o `.env`. Nunca logar valores de variáveis de ambiente.
 
-**Nunca** commitar o `.env` — ele está no `.gitignore`.
-
-## Como Rodar Localmente
+## Rodar e testar
 
 ```bash
 npm install
-cp .env.example .env
-# editar .env com os tokens reais
-node src/index.js
+cp .env.example .env   # preencher
+npm run dev            # reload automático
+npm test               # testes (node:test, sem dependências)
 ```
 
-Para desenvolvimento com reload automático:
+## Regras que já custaram bugs
 
-```bash
-npm run dev
-```
+- **Datas**: NUNCA usar `toISOString()` para "hoje" (vira o dia seguinte à noite). Use `todayStr()` / `toLocalDateStr()` de `src/utils/date.js`. O servidor roda em UTC; quem garante o fuso é `src/config/timezone.js`.
+- **Ano no prompt**: nunca fixar o ano; `buildParseTransactionPrompt` recebe `today` e `year`.
+- **Envio de arquivo no Telegram**: usar `fetch` + `FormData` + `Blob` (o `sendDocument` do Telegraf dava socket hang-up). Ver exportação em `commands.js`.
+- **Modelos de IA**: não fixar nome de modelo fora de `src/ai/providers/`; trocar por variável de ambiente. A família Gemini 1.5 foi desligada.
+- **Banco no Render gratuito**: o disco é efêmero — confirmar que `DATABASE_PATH` aponta para armazenamento persistente.
+- **Assinaturas por PDF**: o Thiago prefere registrar manualmente (evita duplicidade e mantém controle de valores divididos).
 
-## Convenções de Código
+## Convenções
 
-- **ES Modules**: use `import/export`, nunca `require()`
-- **Async/await**: nunca usar `.then()/.catch()` encadeados
-- **Try/catch**: obrigatório em todos os handlers e chamadas externas
-- **Logs**: prefixo `[FinBot]` para info, `[FinBot ERROR]` para erros
-- **Segredos**: nunca logar valores de variáveis de ambiente
-- **Idioma**: todas as respostas ao usuário em português brasileiro
+- ES Modules (`import/export`), `async/await`, `try/catch` em todo handler e chamada externa
+- Logs: `[FinBot]` para info, `[FinBot ERROR]` para erros
+- Respostas ao usuário sempre em português brasileiro
+- `node:sqlite` é síncrono: não usar `await` nas queries
 
-## Banco de Dados
+## Categorias
 
-O banco é inicializado automaticamente na primeira execução. O arquivo `schema.sql` cria as tabelas se não existirem (`CREATE TABLE IF NOT EXISTS`). O `node:sqlite` (`DatabaseSync`) é síncrono — não use `await` nas queries. Não requer compilação nativa; é embutido no Node.js 24+.
+`Alimentação`, `Transporte`, `Moradia`, `Saúde`, `Lazer`, `Assinaturas`, `Educação`, `Compras`, `Investimentos`, `Receita`, `Negócio`, `Outros`
 
-## Categorias Válidas
+## Comandos
 
-`Alimentação`, `Transporte`, `Moradia`, `Saúde`, `Lazer`, `Assinaturas`, `Educação`, `Compras`, `Investimentos`, `Receita`, `Outros`
+`/start`, `/resumo` (`/mes`), `/saldo`, `/gastos`, `/metas`, `/ajuda`, `/fatura`, `/parcelas`, `/assinaturas`, `/cartoes`, `/contas`, `/negocio`, `/exportar`, `/limpar`, `/gerenciar`
 
-## Comandos do Bot
+## Fluxo de uma mensagem
 
-| Comando | Descrição |
-|---|---|
-| `/start` | Cadastra usuário e exibe boas-vindas |
-| `/resumo` ou `/mes` | Resumo mensal com insights de IA |
-| `/saldo` | Saldo rápido do mês |
-| `/gastos` | Últimas 10 transações |
-| `/metas` | Metas financeiras ativas |
-| `/ajuda` | Ajuda completa com exemplos |
-
-## Fluxo de Processamento de Mensagem
-
-1. Usuário envia mensagem de texto livre
-2. `handlers.js` captura e chama `processMessage()`
-3. `transactions.js` chama `parseTransaction()` via `claude.js`
-4. Claude retorna JSON com `{ type, amount, category, description, confidence }`
-5. Se `confidence >= 0.6`: salva automaticamente e confirma ao usuário
-6. Se `confidence < 0.6`: exibe card de confirmação com botões inline
-7. Após salvar gasto: verifica alertas de orçamento via `alerts.js`
+1. `handlers.js` recebe o texto → `processMessage()` (`services/transactions.js`)
+2. `parseTransaction()` (`ai/assistant.js`) → `llm.generateText()` → Groq, ou Gemini se falhar
+3. JSON `{ type, amount, category, description, confidence, date, payment_method, card_name, installments, ... }`
+4. `confidence >= 0.6` salva direto; abaixo disso mostra card com Confirmar / Cancelar / Corrigir categoria
+5. Após salvar: resposta sarcástica (IA) e alertas de orçamento (`services/alerts.js`)
