@@ -1,4 +1,4 @@
-import { generateInsights } from '../ai/gemini.js';
+import { generateInsights } from '../ai/assistant.js';
 import {
   getMonthlySummary,
   getPreviousMonthSummary,

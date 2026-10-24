@@ -1,35 +1,23 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { PARSE_TRANSACTION_PROMPT, INSIGHTS_PROMPT, SARCASTIC_RESPONSE_PROMPT } from './prompts.js';
+// Funções de IA de texto do FinBot (parse, resposta sarcástica, insights).
+// Independe de provedor: quem decide Groq/Gemini é src/ai/llm.js.
 
-function getModel() {
-  if (!process.env.GEMINI_API_KEY) return null;
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  return genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
-}
-
-function extractJSON(text) {
-  const block = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (block) return JSON.parse(block[1].trim());
-  const obj = text.match(/\{[\s\S]*\}/);
-  if (obj) return JSON.parse(obj[0]);
-  return JSON.parse(text.trim());
-}
+import { generateText } from './llm.js';
+import { extractJSON } from './json.js';
+import { buildParseTransactionPrompt, INSIGHTS_PROMPT, SARCASTIC_RESPONSE_PROMPT } from './prompts.js';
+import { todayStr, currentYear } from '../utils/date.js';
 
 export async function parseTransaction(message, userId) {
-  const model = getModel();
-  if (!model) return null;
-
-  const prompt = `${PARSE_TRANSACTION_PROMPT}
+  const prompt = `${buildParseTransactionPrompt({ today: todayStr(), year: currentYear() })}
 
 Mensagem do usuário: "${message}"
 
 Retorne SOMENTE o JSON, sem texto adicional.`;
 
   try {
-    const result = await model.generateContent(prompt);
-    const text = result.response.text();
+    const result = await generateText(prompt, { task: 'parse', temperature: 0 });
+    if (!result) return null;
 
-    const parsed = extractJSON(text);
+    const parsed = extractJSON(result.text);
 
     if (
       typeof parsed.type !== 'string' ||
@@ -37,7 +25,7 @@ Retorne SOMENTE o JSON, sem texto adicional.`;
       typeof parsed.category !== 'string' ||
       typeof parsed.confidence !== 'number'
     ) {
-      console.log(`[FinBot] Resposta do Gemini com formato inválido para userId=${userId}`);
+      console.log(`[FinBot] Resposta da IA (${result.provider}) com formato inválido para userId=${userId}`);
       return null;
     }
 
@@ -48,18 +36,15 @@ Retorne SOMENTE o JSON, sem texto adicional.`;
     return parsed;
   } catch (error) {
     if (error instanceof SyntaxError) {
-      console.error('[FinBot ERROR] Gemini retornou JSON inválido:', error.message);
+      console.error('[FinBot ERROR] IA retornou JSON inválido:', error.message);
     } else {
-      console.error('[FinBot ERROR] Falha ao chamar Gemini API:', error.message);
+      console.error('[FinBot ERROR] Falha ao interpretar transação:', error.message);
     }
     return null;
   }
 }
 
 export async function generateSarcasticResponse({ type, amount, category, description, categoryTotal }) {
-  const model = getModel();
-  if (!model) return null;
-
   const { formatCurrency } = await import('../bot/formatter.js');
 
   const prompt = `${SARCASTIC_RESPONSE_PROMPT}
@@ -74,8 +59,8 @@ Dados da transação:
 Gere a resposta sarcástica agora.`;
 
   try {
-    const result = await model.generateContent(prompt);
-    return result.response.text().trim() || null;
+    const result = await generateText(prompt, { task: 'sarcasmo', temperature: 0.9, maxTokens: 512 });
+    return result?.text || null;
   } catch (error) {
     console.error('[FinBot ERROR] Falha ao gerar resposta sarcástica:', error.message);
     return null;
@@ -83,9 +68,6 @@ Gere a resposta sarcástica agora.`;
 }
 
 export async function generateInsights(userData) {
-  const model = getModel();
-  if (!model) return null;
-
   const { summary, previousSummary, recentTransactions, firstName } = userData;
 
   const prompt = `${INSIGHTS_PROMPT}
@@ -107,11 +89,10 @@ ${recentTransactions
   .join('\n')}`;
 
   try {
-    const result = await model.generateContent(prompt);
-    const text = result.response.text();
-    return text.trim() || null;
+    const result = await generateText(prompt, { task: 'insights', temperature: 0.8 });
+    return result?.text || null;
   } catch (error) {
-    console.error('[FinBot ERROR] Falha ao gerar insights com Gemini:', error.message);
+    console.error('[FinBot ERROR] Falha ao gerar insights:', error.message);
     return null;
   }
 }

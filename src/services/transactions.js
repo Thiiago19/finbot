@@ -1,4 +1,5 @@
-import { parseTransaction } from '../ai/gemini.js';
+import { parseTransaction } from '../ai/assistant.js';
+import { todayStr } from '../utils/date.js';
 import {
   insertTransaction,
   getCategoryMonthTotal,
@@ -26,16 +27,6 @@ export async function processMessage(message, userId) {
   };
 }
 
-// Retorna a data de hoje em horário LOCAL (não UTC) no formato YYYY-MM-DD.
-// Evita bug em que à noite (fuso UTC-3) toISOString() dá o dia seguinte.
-function localTodayStr() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
 function resolveTransactionDate(rawDate) {
   // Aceita apenas strings no formato YYYY-MM-DD informadas pelo usuário.
   // Qualquer outro valor (null, "null", "", undefined, formato inválido) → hoje.
@@ -43,7 +34,7 @@ function resolveTransactionDate(rawDate) {
     console.log('[FinBot] Transação: usando data informada pelo usuário:', rawDate);
     return rawDate;
   }
-  const today = localTodayStr();
+  const today = todayStr();
   console.log('[FinBot] Transação: sem data informada, usando hoje (local):', today);
   return today;
 }

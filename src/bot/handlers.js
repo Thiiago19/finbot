@@ -11,9 +11,11 @@ import {
 } from '../db/queries.js';
 import { processMessage, saveTransaction } from '../services/transactions.js';
 import { runAlertsAfterExpense } from '../services/alerts.js';
-import { generateSarcasticResponse } from '../ai/gemini.js';
+import { generateSarcasticResponse } from '../ai/assistant.js';
 import { downloadTelegramFile, analyzeImage, analyzeAudio, analyzePDF } from '../ai/media.js';
+import { isTextAIEnabled, isVisionAIEnabled, isAudioAIEnabled } from '../ai/llm.js';
 import { pendingBillAmount } from '../state.js';
+import { todayStr } from '../utils/date.js';
 import {
   formatCurrency,
   formatTransactionConfirm,
@@ -114,6 +116,8 @@ export function registerHandlers(bot) {
 
   bot.action(/^confirm_(.+)$/, handleConfirmCallback);
   bot.action('cancel_transaction', handleCancelCallback);
+  bot.action(/^correct_(.+)$/, handleCorrectCategory);
+  bot.action(/^ccat_(.+)_(\d+)$/, handleCategoryPick);
 
   bot.action(/^pay_(cred|deb|pix|din)_(\d+)$/, handlePaymentMethod);
   bot.action(/^inst_(av|pr)_(\d+)$/, handleInstallmentChoice);
@@ -164,7 +168,7 @@ async function saveAndReply(ctx, parsed, rawSource, userId) {
     ? formatSarcasticSave(sarcasticText, parsed, saveResult.categoryTotal)
     : `✅ *Registrado!*\n\n${formatCurrency(parsed.amount)} em ${parsed.category}`;
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayStr();
   const parsedDate = (parsed.date && parsed.date !== 'null') ? parsed.date : null;
   if (parsedDate && parsedDate !== today) {
     const d = new Date(parsed.date + 'T12:00:00');
@@ -450,7 +454,7 @@ function normalizeInstallments(n) {
 }
 
 function formatInstallmentRange(baseDateStr, n) {
-  const clean = (baseDateStr || new Date().toISOString().split('T')[0])
+  const clean = (baseDateStr || todayStr())
     .split('T')[0].split(' ')[0];
   const [by, bm] = clean.split('-').map(Number);
   const startIdx = bm - 1;
@@ -941,10 +945,10 @@ async function handleTextMessage(ctx) {
     const result = await processMessage(text, user.id);
 
     if (!result.success) {
-      const aiUnavailable = !process.env.GEMINI_API_KEY;
+      const aiUnavailable = !isTextAIEnabled();
       await ctx.reply(
         aiUnavailable
-          ? `⚙️ A IA está desabilitada no momento (GEMINI_API_KEY não configurada).\n\nUse os comandos disponíveis: /resumo, /saldo, /gastos, /metas ou /ajuda.`
+          ? `⚙️ A IA está desabilitada no momento (nenhuma chave de IA configurada).\n\nUse os comandos disponíveis: /resumo, /saldo, /gastos, /metas ou /ajuda.`
           : `🤔 Não identifiquei uma transação financeira na sua mensagem.\n\nTente algo como:\n• _"Gastei 50 no mercado"_\n• _"Paguei 120 de internet"_\n• _"Recebi 2000 de freelance"_\n\nUse /ajuda para ver mais exemplos! 😊`,
         { parse_mode: 'Markdown' }
       );
@@ -960,13 +964,7 @@ async function handleTextMessage(ctx) {
 
       await ctx.reply(formatTransactionConfirm(parsed), {
         parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([
-          [
-            Markup.button.callback('✅ Confirmar', `confirm_${key}`),
-            Markup.button.callback('❌ Cancelar', 'cancel_transaction'),
-          ],
-          [Markup.button.callback('✏️ Corrigir categoria', `correct_${key}`)],
-        ]),
+        ...confirmKeyboard(key),
       });
       return;
     }
@@ -982,7 +980,7 @@ async function handleTextMessage(ctx) {
 
 async function handlePhoto(ctx) {
   try {
-    if (!process.env.GEMINI_API_KEY) { await ctx.reply('⚙️ IA não configurada.'); return; }
+    if (!isVisionAIEnabled()) { await ctx.reply('⚙️ IA não configurada.'); return; }
     await ctx.reply('🔍 Analisando o cupom... aguenta um segundo 🙄');
     const photos = ctx.message.photo;
     const base64 = await downloadTelegramFile(photos[photos.length - 1].file_id);
@@ -998,18 +996,19 @@ async function handlePhoto(ctx) {
 
 async function handleVoice(ctx) {
   try {
-    if (!process.env.GEMINI_API_KEY) { await ctx.reply('⚙️ IA não configurada.'); return; }
+    if (!isAudioAIEnabled()) { await ctx.reply('⚙️ IA não configurada.'); return; }
     await ctx.reply('🎙️ Ouvindo seu áudio... esperamos que seja sobre dinheiro 😏');
     const { file_id, mime_type } = ctx.message.voice;
     const base64 = await downloadTelegramFile(file_id);
     const parsed = await analyzeAudio(base64, mime_type || 'audio/ogg');
     if (!parsed) { await ctx.reply('😬 Não consegui extrair uma transação do áudio.'); return; }
     const user = getOrCreateUser(ctx.from.id, ctx.from.first_name, ctx.from.username);
+    const rawMessage = parsed.transcript ? `[áudio] ${parsed.transcript}` : '[áudio]';
     if (parsed.confidence >= 0.6) {
-      await saveAndReply(ctx, parsed, '[áudio]', user.id);
+      await saveAndReply(ctx, parsed, rawMessage, user.id);
     } else {
       const key = `${user.id}_${Date.now()}`;
-      pendingTransactions.set(key, { parsed, rawMessage: '[áudio]', userId: user.id });
+      pendingTransactions.set(key, { parsed, rawMessage, userId: user.id });
       setTimeout(() => pendingTransactions.delete(key), 5 * 60 * 1000);
       await ctx.reply(
         `🎙️ *Ouvi isso no seu áudio:*\n\n` + formatTransactionConfirm(parsed) + `\n\n_Tá certo isso? 🤔_`,
@@ -1031,7 +1030,7 @@ async function handleDocument(ctx) {
   try {
     const doc = ctx.message.document;
     if (doc.mime_type !== 'application/pdf') { await ctx.reply('📎 Só consigo analisar arquivos PDF por enquanto.'); return; }
-    if (!process.env.GEMINI_API_KEY) { await ctx.reply('⚙️ IA não configurada.'); return; }
+    if (!isVisionAIEnabled()) { await ctx.reply('⚙️ IA não configurada.'); return; }
     await ctx.reply('📄 Analisando o PDF... isso pode demorar um pouco ☕');
     const base64 = await downloadTelegramFile(doc.file_id);
     const transactions = await analyzePDF(base64);
@@ -1250,6 +1249,68 @@ async function handlePdfCancel(ctx) {
 }
 
 // ─── Confirmação texto/voz ────────────────────────────────────────────────────
+
+// ─── Corrigir categoria (card de confirmação) ────────────────────────────────
+
+const CORRECTABLE_CATEGORIES = [
+  'Alimentação', 'Transporte', 'Moradia', 'Saúde', 'Lazer', 'Assinaturas',
+  'Educação', 'Compras', 'Investimentos', 'Receita', 'Negócio', 'Outros',
+];
+
+function confirmKeyboard(key) {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('✅ Confirmar', `confirm_${key}`),
+      Markup.button.callback('❌ Cancelar', 'cancel_transaction'),
+    ],
+    [Markup.button.callback('✏️ Corrigir categoria', `correct_${key}`)],
+  ]);
+}
+
+async function handleCorrectCategory(ctx) {
+  try {
+    await ctx.answerCbQuery();
+    const key = ctx.match[1];
+    if (!pendingTransactions.has(key)) {
+      await ctx.editMessageText('⏰ Confirmação expirada. Envie a mensagem novamente.');
+      return;
+    }
+
+    const buttons = CORRECTABLE_CATEGORIES.map((cat, i) => Markup.button.callback(cat, `ccat_${key}_${i}`));
+    const rows = [];
+    for (let i = 0; i < buttons.length; i += 3) rows.push(buttons.slice(i, i + 3));
+
+    await ctx.editMessageText('✏️ Qual é a categoria certa? (a IA também erra, quem diria 🙄)', {
+      ...Markup.inlineKeyboard(rows),
+    });
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro ao abrir correção de categoria:', error.message);
+  }
+}
+
+async function handleCategoryPick(ctx) {
+  try {
+    await ctx.answerCbQuery();
+    const key = ctx.match[1];
+    const category = CORRECTABLE_CATEGORIES[Number(ctx.match[2])];
+    const pending = pendingTransactions.get(key);
+    if (!pending || !category) {
+      await ctx.editMessageText('⏰ Confirmação expirada. Envie a mensagem novamente.');
+      return;
+    }
+
+    pending.parsed.category = category;
+    // Receita é categoria de entrada; qualquer outra é gasto.
+    pending.parsed.type = category === 'Receita' ? 'income' : 'expense';
+
+    await ctx.editMessageText(formatTransactionConfirm(pending.parsed), {
+      parse_mode: 'Markdown',
+      ...confirmKeyboard(key),
+    });
+  } catch (error) {
+    console.error('[FinBot ERROR] Erro ao corrigir categoria:', error.message);
+  }
+}
 
 async function handleConfirmCallback(ctx) {
   try {

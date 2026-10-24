@@ -1,4 +1,5 @@
 import { getDatabase } from './database.js';
+import { todayStr } from '../utils/date.js';
 
 // ─── Usuários ───────────────────────────────────────────────────────────────
 
@@ -28,7 +29,7 @@ export function getOrCreateUser(telegramId, firstName, username) {
 
 export function insertTransaction(userId, type, amount, category, description, rawMessage, transactionDate = null) {
   const db = getDatabase();
-  const date = transactionDate || new Date().toISOString().split('T')[0];
+  const date = transactionDate || todayStr();
   const result = db
     .prepare(
       `INSERT INTO transactions (user_id, type, amount, category, description, raw_message, transaction_date)
