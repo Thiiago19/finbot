@@ -51,16 +51,19 @@ async function main() {
   process.once('SIGINT', () => shutdown(bot));
   process.once('SIGTERM', () => shutdown(bot));
 
-  await bot.launch();
-  console.log('[FinBot] Bot iniciado com sucesso! Aguardando mensagens...');
+  // Os jobs vêm ANTES do launch: no polling, bot.launch() só retorna quando o bot para.
   startNotificationJob(bot);
   startSubscriptionScheduler(bot);
   startKeepAlive();
+
+  await bot.launch(() => {
+    console.log('[FinBot] Bot iniciado com sucesso! Aguardando mensagens...');
+  });
 }
 
 function shutdown(bot) {
   console.log('[FinBot] Encerrando bot...');
-  bot.stop('SIGINT');
+  try { bot.stop('SIGTERM'); } catch { /* bot ainda não estava rodando */ }
   closeDatabase();
   process.exit(0);
 }
