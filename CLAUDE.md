@@ -29,7 +29,7 @@ src/
 │   ├── prompts.js           ← prompts; buildParseTransactionPrompt({ today, year })
 │   ├── json.js              ← extractJSON / extractJSONArray
 │   └── providers/           ← groq.js, gemini.js, errors.js (ProviderError)
-├── bot/                     ← commands.js, handlers.js, formatter.js
+├── bot/                     ← commands.js, handlers.js, formatter.js, launch.js (webhook × polling)
 ├── db/                      ← database.js, schema.sql, queries.js
 └── services/                ← transactions, insights, alerts, notifications, scheduler, exporter
 test/                        ← node:test (npm test)
@@ -44,7 +44,7 @@ test/                        ← node:test (npm test)
 | `GEMINI_API_KEY` | recomendada | Imagem, PDF e reserva |
 | `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | em produção | Banco persistente no Turso (réplica local em `TURSO_REPLICA_PATH`) |
 | `DATABASE_PATH` | não | SQLite local quando não há Turso. Padrão `./finbot.db` |
-| `GROQ_MODEL`, `GROQ_STT_MODEL`, `GROQ_REASONING_EFFORT`, `GEMINI_MODEL`, `AI_TEXT_PROVIDERS`, `APP_TIMEZONE`, `KEEPALIVE` | não | Ver `.env.example` |
+| `GROQ_MODEL`, `GROQ_STT_MODEL`, `GROQ_REASONING_EFFORT`, `GEMINI_MODEL`, `AI_TEXT_PROVIDERS`, `APP_TIMEZONE`, `KEEPALIVE`, `BOT_MODE`, `WEBHOOK_DOMAIN` | não | Ver `.env.example` |
 
 Nunca commitar o `.env`. Nunca logar valores de variáveis de ambiente.
 
@@ -65,6 +65,8 @@ npm test               # testes (node:test)
 - **Modelos de IA**: não fixar nome de modelo fora de `src/ai/providers/`; trocar por variável de ambiente. A família Gemini 1.5 foi desligada.
 - **Banco no Render gratuito**: o disco é efêmero e o plano não aceita disco persistente. Em produção o banco é o Turso (`TURSO_DATABASE_URL`). Escolha do driver em `resolveDbConfig()` (`src/db/database.js`).
 - **Hibernação do Render**: sem tráfego HTTP de entrada por 15 min o serviço dorme (o polling do Telegram não conta). `services/keepalive.js` pinga `RENDER_EXTERNAL_URL/health` a cada 10 min.
+- **Webhook no Render, polling local** (`src/bot/launch.js`): com polling, dois processos durante o deploy brigam pelo `getUpdates` (erro 409) e o novo morria. O caminho e o segredo do webhook são derivados do token; nunca logar.
+- **`bot.launch()` com polling só retorna quando o bot para**: nada que precise rodar pode vir depois de um `await bot.launch()`.
 - **Assinaturas por PDF**: o Thiago prefere registrar manualmente (evita duplicidade e mantém controle de valores divididos).
 
 ## Convenções
