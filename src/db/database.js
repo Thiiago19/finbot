@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
+import Libsql from 'libsql';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -18,22 +19,57 @@ export function getDatabase() {
   return db;
 }
 
+/**
+ * Decide qual banco usar a partir das variáveis de ambiente.
+ * - Com TURSO_DATABASE_URL: réplica local sincronizada com o Turso (dados persistem fora do Render).
+ * - Sem ela: SQLite local via node:sqlite (no Render gratuito os dados somem a cada reinício).
+ */
+export function resolveDbConfig(env = process.env) {
+  if (env.TURSO_DATABASE_URL) {
+    return {
+      driver: 'turso',
+      path: env.TURSO_REPLICA_PATH || './finbot-replica.db',
+      syncUrl: env.TURSO_DATABASE_URL,
+      authToken: env.TURSO_AUTH_TOKEN,
+    };
+  }
+  return { driver: 'local', path: env.DATABASE_PATH || './finbot.db' };
+}
+
+function openDatabase(config) {
+  if (config.driver === 'turso') {
+    const conn = new Libsql(config.path, { syncUrl: config.syncUrl, authToken: config.authToken });
+    conn.sync(); // baixa o estado atual do Turso antes de qualquer leitura
+    return conn;
+  }
+  const conn = new DatabaseSync(config.path);
+  conn.exec('PRAGMA journal_mode = WAL');
+  return conn;
+}
+
+/** Cria as tabelas e aplica as migrações. Funciona com node:sqlite e com libsql. */
+export function setupSchema(conn) {
+  try { conn.exec('PRAGMA foreign_keys = ON'); } catch { /* nem todo driver aceita */ }
+  const schemaPath = join(__dirname, 'schema.sql');
+  conn.exec(readFileSync(schemaPath, 'utf-8'));
+  runMigrations(conn);
+}
+
 export function initDatabase() {
-  const dbPath = process.env.DATABASE_PATH || './finbot.db';
+  const config = resolveDbConfig();
 
   try {
-    db = new DatabaseSync(dbPath);
+    db = openDatabase(config);
+    setupSchema(db);
 
-    db.exec('PRAGMA journal_mode = WAL');
-    db.exec('PRAGMA foreign_keys = ON');
-
-    const schemaPath = join(__dirname, 'schema.sql');
-    const schema = readFileSync(schemaPath, 'utf-8');
-
-    db.exec(schema);
-    runMigrations(db);
-
-    console.log('[FinBot] Banco de dados inicializado com sucesso.');
+    if (config.driver === 'turso') {
+      console.log('[FinBot] Banco de dados inicializado: Turso (réplica local sincronizada).');
+    } else {
+      console.log(`[FinBot] Banco de dados inicializado: SQLite local (${config.path}).`);
+      if (process.env.RENDER) {
+        console.log('[FinBot] ATENÇÃO: no Render gratuito o disco é efêmero — configure TURSO_DATABASE_URL para não perder dados.');
+      }
+    }
     return db;
   } catch (error) {
     console.error('[FinBot ERROR] Falha ao inicializar banco de dados:', error.message);

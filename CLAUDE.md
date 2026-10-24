@@ -11,7 +11,7 @@ Assistente financeiro pessoal via Telegram. Interpreta mensagens em linguagem na
 - **IA de texto**: Groq (`openai/gpt-oss-120b`) com fallback para Gemini — ver `src/ai/llm.js`
 - **Áudio**: Whisper no Groq (`whisper-large-v3-turbo`) → mesmo parser do texto; fallback Gemini
 - **Imagem e PDF**: Gemini (`gemini-2.5-flash-lite`, configurável por `GEMINI_MODEL`)
-- **Banco**: `node:sqlite` (`DatabaseSync`, síncrono, embutido no Node — sem better-sqlite3)
+- **Banco**: Turso (réplica `libsql`) quando há `TURSO_DATABASE_URL`; senão `node:sqlite` local. Os dois são síncronos e têm a mesma API (`prepare/run/get/all/exec`). Sem better-sqlite3.
 - **Deploy**: Render (web service gratuito) + GitHub
 
 ## Estrutura
@@ -29,7 +29,7 @@ src/
 │   ├── prompts.js           ← prompts; buildParseTransactionPrompt({ today, year })
 │   ├── json.js              ← extractJSON / extractJSONArray
 │   └── providers/           ← groq.js, gemini.js, errors.js (ProviderError)
-├── bot/                     ← commands.js, handlers.js, formatter.js
+├── bot/                     ← commands.js, handlers.js, formatter.js, launch.js (webhook × polling)
 ├── db/                      ← database.js, schema.sql, queries.js
 └── services/                ← transactions, insights, alerts, notifications, scheduler, exporter
 test/                        ← node:test (npm test)
@@ -42,8 +42,9 @@ test/                        ← node:test (npm test)
 | `TELEGRAM_TOKEN` | sim | Token do BotFather |
 | `GROQ_API_KEY` | recomendada | Texto e áudio (principal) |
 | `GEMINI_API_KEY` | recomendada | Imagem, PDF e reserva |
-| `DATABASE_PATH` | não | Padrão `./finbot.db` |
-| `GROQ_MODEL`, `GROQ_STT_MODEL`, `GROQ_REASONING_EFFORT`, `GEMINI_MODEL`, `AI_TEXT_PROVIDERS`, `APP_TIMEZONE` | não | Ver `.env.example` |
+| `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | em produção | Banco persistente no Turso (réplica local em `TURSO_REPLICA_PATH`) |
+| `DATABASE_PATH` | não | SQLite local quando não há Turso. Padrão `./finbot.db` |
+| `GROQ_MODEL`, `GROQ_STT_MODEL`, `GROQ_REASONING_EFFORT`, `GEMINI_MODEL`, `AI_TEXT_PROVIDERS`, `APP_TIMEZONE`, `KEEPALIVE`, `BOT_MODE`, `WEBHOOK_DOMAIN` | não | Ver `.env.example` |
 
 Nunca commitar o `.env`. Nunca logar valores de variáveis de ambiente.
 
@@ -53,7 +54,7 @@ Nunca commitar o `.env`. Nunca logar valores de variáveis de ambiente.
 npm install
 cp .env.example .env   # preencher
 npm run dev            # reload automático
-npm test               # testes (node:test, sem dependências)
+npm test               # testes (node:test)
 ```
 
 ## Regras que já custaram bugs
@@ -62,7 +63,10 @@ npm test               # testes (node:test, sem dependências)
 - **Ano no prompt**: nunca fixar o ano; `buildParseTransactionPrompt` recebe `today` e `year`.
 - **Envio de arquivo no Telegram**: usar `fetch` + `FormData` + `Blob` (o `sendDocument` do Telegraf dava socket hang-up). Ver exportação em `commands.js`.
 - **Modelos de IA**: não fixar nome de modelo fora de `src/ai/providers/`; trocar por variável de ambiente. A família Gemini 1.5 foi desligada.
-- **Banco no Render gratuito**: o disco é efêmero — confirmar que `DATABASE_PATH` aponta para armazenamento persistente.
+- **Banco no Render gratuito**: o disco é efêmero e o plano não aceita disco persistente. Em produção o banco é o Turso (`TURSO_DATABASE_URL`). Escolha do driver em `resolveDbConfig()` (`src/db/database.js`).
+- **Hibernação do Render**: sem tráfego HTTP de entrada por 15 min o serviço dorme (o polling do Telegram não conta). `services/keepalive.js` pinga `RENDER_EXTERNAL_URL/health` a cada 10 min.
+- **Webhook no Render, polling local** (`src/bot/launch.js`): com polling, dois processos durante o deploy brigam pelo `getUpdates` (erro 409) e o novo morria. O caminho e o segredo do webhook são derivados do token; nunca logar.
+- **`bot.launch()` com polling só retorna quando o bot para**: nada que precise rodar pode vir depois de um `await bot.launch()`.
 - **Assinaturas por PDF**: o Thiago prefere registrar manualmente (evita duplicidade e mantém controle de valores divididos).
 
 ## Convenções
@@ -70,7 +74,7 @@ npm test               # testes (node:test, sem dependências)
 - ES Modules (`import/export`), `async/await`, `try/catch` em todo handler e chamada externa
 - Logs: `[FinBot]` para info, `[FinBot ERROR]` para erros
 - Respostas ao usuário sempre em português brasileiro
-- `node:sqlite` é síncrono: não usar `await` nas queries
+- O banco é síncrono (`node:sqlite` e `libsql`): não usar `await` nas queries. Use só a API comum aos dois.
 
 ## Categorias
 
