@@ -7,6 +7,7 @@ import { registerCommands } from './bot/commands.js';
 import { registerHandlers } from './bot/handlers.js';
 import { startNotificationJob } from './services/notifications.js';
 import { startSubscriptionScheduler } from './services/scheduler.js';
+import { startKeepAlive } from './services/keepalive.js';
 import { describeProviders } from './ai/llm.js';
 
 // Servidor HTTP iniciado imediatamente — antes de qualquer outra coisa.
@@ -54,6 +55,7 @@ async function main() {
   console.log('[FinBot] Bot iniciado com sucesso! Aguardando mensagens...');
   startNotificationJob(bot);
   startSubscriptionScheduler(bot);
+  startKeepAlive();
 }
 
 function shutdown(bot) {

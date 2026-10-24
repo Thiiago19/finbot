@@ -44,7 +44,7 @@ test/                        ← node:test (npm test)
 | `GEMINI_API_KEY` | recomendada | Imagem, PDF e reserva |
 | `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | em produção | Banco persistente no Turso (réplica local em `TURSO_REPLICA_PATH`) |
 | `DATABASE_PATH` | não | SQLite local quando não há Turso. Padrão `./finbot.db` |
-| `GROQ_MODEL`, `GROQ_STT_MODEL`, `GROQ_REASONING_EFFORT`, `GEMINI_MODEL`, `AI_TEXT_PROVIDERS`, `APP_TIMEZONE` | não | Ver `.env.example` |
+| `GROQ_MODEL`, `GROQ_STT_MODEL`, `GROQ_REASONING_EFFORT`, `GEMINI_MODEL`, `AI_TEXT_PROVIDERS`, `APP_TIMEZONE`, `KEEPALIVE` | não | Ver `.env.example` |
 
 Nunca commitar o `.env`. Nunca logar valores de variáveis de ambiente.
 
@@ -64,6 +64,7 @@ npm test               # testes (node:test)
 - **Envio de arquivo no Telegram**: usar `fetch` + `FormData` + `Blob` (o `sendDocument` do Telegraf dava socket hang-up). Ver exportação em `commands.js`.
 - **Modelos de IA**: não fixar nome de modelo fora de `src/ai/providers/`; trocar por variável de ambiente. A família Gemini 1.5 foi desligada.
 - **Banco no Render gratuito**: o disco é efêmero e o plano não aceita disco persistente. Em produção o banco é o Turso (`TURSO_DATABASE_URL`). Escolha do driver em `resolveDbConfig()` (`src/db/database.js`).
+- **Hibernação do Render**: sem tráfego HTTP de entrada por 15 min o serviço dorme (o polling do Telegram não conta). `services/keepalive.js` pinga `RENDER_EXTERNAL_URL/health` a cada 10 min.
 - **Assinaturas por PDF**: o Thiago prefere registrar manualmente (evita duplicidade e mantém controle de valores divididos).
 
 ## Convenções
